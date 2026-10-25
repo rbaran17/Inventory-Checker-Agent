@@ -1,2 +1,106 @@
 # Inventory-Checker-Agent
-Checks Inventory and returns a structured excel output
+
+Physical inventory observation agent for audit teams, built on **Microsoft Agent Framework (MAF)**.
+
+Auditors observing a client's count pair their phone to the observation app by scanning a QR code.
+The phone streams photos, bursts and short clips straight into structured observation records
+(test counts, procedure observations, condition notes, cutoff documents, tag control). Each capture is
+hashed on the phone, re-verified by the server and kept in write-once storage. At close, a MAF workflow
+checks open items, locks the session and produces a **structured Excel workbook**, a test-count schedule
+CSV, an observation memo draft and an evidence package with a SHA-256 manifest.
+
+Source PRD: *Physical Inventory Observation – Phone Camera Capture: Tech Spec*.
+
+## Architecture
+
+```
+ On site                                    Firm cloud
+ ┌──────────────────────┐  HTTPS   ┌───────────────────────┐      ┌──────────────────────┐
+ │ Phone capture page   │────────▶ │ Ingestion service     │────▶ │ Evidence store       │
+ │ /pair (no app install)│         │ SSO, re-check SHA-256 │      │ write-once (WORM)    │
+ │ photo/burst/clip,     │         │ stamp receipt time    │      └──────────────────────┘
+ │ SHA-256, offline queue│         └───────────┬───────────┘
+ └──────────▲───────────┘                      ▼
+            │ scan QR            ┌───────────────────────┐      ┌──────────────────────┐
+ ┌──────────┴───────────┐ HTTPS  │ Observation service   │◀────▶│ AI assist (MAF)      │
+ │ Observation app  /   │◀──────▶│ versioned records,    │      │ drafts only          │
+ │ laptop or tablet     │        │ hash-chained audit    │      └──────────────────────┘
+ └──────────────────────┘        └───────────┬───────────┘
+                                             ▼
+                                 ┌───────────────────────┐
+                                 │ Close-out workflow    │  Excel / CSV / memo /
+                                 │ (MAF Workflow)        │  evidence + hash manifest
+                                 └───────────────────────┘
+```
+
+| Module | What it does |
+|---|---|
+| `models.py` | PRD data model: Session, Zone, TestCount, ProcedureObservation, ConditionNote, CutoffDocument, TagControl, Evidence, ReviewEvent, plus field provenance (`typed` / `accepted` / `edited` / `imported`) |
+| `store.py` | SQLite metadata with DB triggers that make evidence, record versions and the audit trail immutable; `LocalWormEvidenceStore` (refuses overwrite/delete); hash-chained audit log with `verify_audit_chain()` |
+| `service.py` | Business rules: planning, sampling, pairing, ingestion, records and corrections, coverage, open items, close/lock, review, sign-off |
+| `agents/evidence_reader.py` | MAF `Agent` with structured output (`EvidenceExtract`): reads tags, SKUs, lot codes, bin codes, suggests counts for regular layouts, flags blur/glare |
+| `agents/copilot.py` | MAF `Agent` with tools over the session. Read tools run freely; every write tool uses `approval_mode="always_require"`, so nothing is saved until the observer approves |
+| `agents/memo.py` | Deterministic memo body traced to record ids, plus an optional AI-drafted summary, labelled as such |
+| `agents/closeout.py` | MAF `Workflow`: `OpenItemsGate → MemoDrafter → ExportPackager` |
+| `export.py` | Excel workbook (Summary, Test Counts with amber rows over tolerance, Procedures, Condition Notes, Cutoff, Tag Control, Evidence Manifest, Close Explanations), CSV schedule, evidence ZIP |
+| `api.py` | FastAPI app: JSON API, `/` observation app, `/pair` phone capture page |
+| `static/` | `capture.html` (phone) and `app.html` (laptop), plain HTML/JS with no build step |
+
+## Quick start
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"          # add ,azure for Entra ID sign-in to Azure OpenAI
+cp .env.example .env             # set AZURE_OPENAI_* to turn on AI assist (optional)
+
+inventory-checker demo           # seeds a session with zones and samples/perpetual_listing.csv
+inventory-checker serve --port 8443 --certfile cert.pem --keyfile key.pem
+```
+
+Open `https://<host>:8443/` on the laptop and sign in as `lead@firm.example`. Choose the session, press
+**Pair phone** and scan the QR code with the phone. Phones only allow camera access over HTTPS. Use a
+certificate the phone trusts, and set `PUBLIC_BASE_URL` to the hostname the phone will reach.
+
+Run the tests with `pytest`. The MAF agents are tested with a scripted chat client, so no model or
+network is needed.
+
+### AI configuration
+
+AI assist is optional. With nothing configured, the app works and the AI buttons and copilot are hidden.
+
+| Variable | Purpose |
+|---|---|
+| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` | Recommended: Azure OpenAI in the firm's approved tenant. Signs in with `DefaultAzureCredential` |
+| `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION` | Optional key-based auth / API version |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | Local development only |
+
+## Workflow coverage (PRD → implementation)
+
+| PRD step | Where |
+|---|---|
+| Plan: session, zones, listing, high-value sample | `POST /api/sessions`, `/zones`, `/listing`, `/sample` (random + all items over the value threshold) |
+| Pair: one-time QR, 5 min, single use, one camera per observer | `create_pairing_token` / `redeem_pairing`; phone shows session, location and observer; laptop shows phone and battery; one-tap unpair on either side |
+| Capture: photo, 3-frame burst keeping the sharpest, 5–30 s clip | `capture.html` (Laplacian-variance sharpness, MediaRecorder, steadiness indicator, Wake Lock, BarcodeDetector for bin codes) |
+| Per-capture metadata, two clocks | SHA-256 on the phone (`crypto.subtle`), server recompute and reject on mismatch, device and receipt time, clock gap shown in the tray |
+| Poor connectivity | IndexedDB queue, visible queue count, idempotent retry by hash; queued uploads block close |
+| Live evidence tray, drag to move | `app.html` polling every 3 s; captures attach to the record open on the observer's laptop; moves are audited |
+| Test count form, tolerance | Client count filled from the listing; difference computed server-side, never typed; amber when over tolerance |
+| AI assist, suggestions only | `/api/evidence/{id}/suggest` stores a `Suggestion`; the form shows drafts; provenance kept per field |
+| Coverage map | `/coverage` per zone |
+| Open-items check at close | Counts without evidence, unexplained differences, tag control missing or unused tags not recorded, sampled items not counted, queried records, queued uploads |
+| Close / lock / review / sign-off | Closed sessions take no captures; review approve/query/reject (query reopens); reviewed sessions take only follow-up notes |
+| Export | Excel workbook, CSV schedule, memo draft, evidence ZIP with `manifest.json` and `SHA256SUMS.csv`, records with full version history, audit trail |
+
+## Known gaps (pilot build)
+
+- **SSO/MFA.** `AUTH_MODE=dev` trusts an `X-User` header or a cookie set by the dev sign-in box. In
+  production, put the service behind the firm's identity-aware proxy (e.g. Entra ID). The proxy must set
+  `TRUSTED_USER_HEADER` and strip any copy of that header sent by clients.
+- **WORM storage** is simulated locally (read-only files, no overwrite or delete, DB triggers). Production
+  should implement `EvidenceStore` on object storage with retention lock (e.g. Azure Blob immutable
+  storage) at the firm's retention period (7 years PCAOB AS 1215, at least 5 years AU-C 230).
+- **Face blurring on export** is not implemented. The manifest records `faces_blurred: false`. Blurred
+  copies should be derived files linked to the originals, so the original hashes stay valid.
+- **Workpaper-system import format** is not yet known (PRD open question). Excel and CSV are produced today.
+- The "active record" (where phone captures attach) is held in memory per observer and resets on restart.
+- Default tolerance and who can change it are still open questions. Tolerance is set per session by the lead.

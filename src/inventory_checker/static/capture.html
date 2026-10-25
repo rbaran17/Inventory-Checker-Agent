@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Count Camera</title>
+<style>
+  :root { --bg:#0b0f17; --panel:#151b26; --ink:#eef2f8; --muted:#9aa6b8; --accent:#2f7df6; --amber:#f2b33d; --red:#e5484d; --green:#2fb36f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:10px 14px; background:var(--panel); display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  header .who { font-size:13px; color:var(--muted); }
+  header b { color:var(--ink); }
+  #viewport { position:relative; background:#000; aspect-ratio:3/4; max-height:60vh; width:100%; overflow:hidden; }
+  video { width:100%; height:100%; object-fit:cover; }
+  #steady { position:absolute; top:10px; left:10px; padding:4px 10px; border-radius:99px; font-size:13px; background:rgba(0,0,0,.6); }
+  #rec { position:absolute; top:10px; right:10px; padding:4px 10px; border-radius:99px; background:var(--red); display:none; }
+  .bar { display:flex; gap:8px; padding:10px 14px; flex-wrap:wrap; }
+  button { flex:1; min-width:90px; padding:16px 10px; border:0; border-radius:12px; font-size:16px; font-weight:600; color:#fff; background:var(--accent); }
+  button.secondary { background:#2a3344; }
+  button.danger { background:var(--red); }
+  button:disabled { opacity:.45; }
+  label { font-size:13px; color:var(--muted); display:block; }
+  select, input { width:100%; padding:10px; border-radius:10px; border:1px solid #2a3344; background:#0f141d; color:var(--ink); font-size:15px; }
+  .row { display:flex; gap:8px; padding:0 14px 8px; }
+  .row > div { flex:1; }
+  #status { padding:8px 14px; font-size:13px; color:var(--muted); }
+  #queue { font-weight:700; }
+  .warn { color:var(--amber); }
+  .bad { color:var(--red); }
+  .ok { color:var(--green); }
+  #notice, #signin { margin:14px; padding:14px; background:var(--panel); border-radius:12px; }
+  #thumbs { display:flex; gap:6px; padding:0 14px 14px; overflow-x:auto; }
+  #thumbs img { width:64px; height:64px; object-fit:cover; border-radius:8px; border:2px solid #2a3344; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div id="signin" class="hidden">
+  <h3>Sign in to pair this phone</h3>
+  <p class="who">Development sign-in. In production the firm's SSO (with MFA) signs you in here.</p>
+  <label>Firm email <input id="email" type="email" autocomplete="email"></label>
+  <div class="bar"><button id="signinBtn">Pair phone</button></div>
+  <p id="signinErr" class="bad"></p>
+</div>
+
+<div id="main" class="hidden">
+  <header>
+    <div>
+      <div><b id="sessName">-</b></div>
+      <div class="who">Observer <b id="observer">-</b></div>
+    </div>
+    <div class="who" style="text-align:right">Queue <span id="queue">0</span><br><span id="battery"></span></div>
+  </header>
+  <div id="notice">
+    <b>Recording notice.</b> Photos and clips are audit evidence for this count. Count team members may appear
+    in clips; tell them before recording and follow the agreed consent rules. Captures are not saved to your camera roll.
+    <div class="bar"><button id="ackNotice">Start camera</button></div>
+  </div>
+  <div id="viewport"><video id="video" playsinline muted autoplay></video><div id="steady">…</div><div id="rec">● REC <span id="recSecs">0</span>s</div></div>
+  <div id="status">Attaching to: <b id="activeRec">no record open on the laptop</b></div>
+  <div class="row">
+    <div><label>Zone<select id="zone"><option value="">(none)</option></select></label></div>
+    <div><label>Bin code<input id="bin" placeholder="scan or type"></label></div>
+  </div>
+  <div class="bar">
+    <button id="photoBtn" disabled>Photo</button>
+    <button id="burstBtn" class="secondary" disabled>Burst</button>
+    <button id="clipBtn" class="secondary" disabled>Clip</button>
+  </div>
+  <div id="thumbs"></div>
+  <div class="bar"><button id="unpairBtn" class="danger">Unpair phone</button></div>
+  <div id="log" class="who" style="padding:0 14px 30px"></div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const log = (msg, cls = "") => { const p = document.createElement("div"); p.className = cls; p.textContent = new Date().toLocaleTimeString() + " " + msg; $("log").prepend(p); };
+  let deviceToken = sessionStorage.getItem("ic_device_token");
+  let stream = null, steady = true, uploading = false, wakeLock = null;
+
+  // ------------------------------------------------------------ IndexedDB offline queue
+  const dbp = new Promise((res, rej) => {
+    const r = indexedDB.open("count-camera", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("queue", { keyPath: "id" });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const tx = async (mode, fn) => { const db = await dbp; return new Promise((res, rej) => { const t = db.transaction("queue", mode); const out = fn(t.objectStore("queue")); t.oncomplete = () => res(out && out.result !== undefined ? out.result : out); t.onerror = () => rej(t.error); }); };
+  const qPut = (item) => tx("readwrite", (s) => s.put(item));
+  const qDel = (id) => tx("readwrite", (s) => s.delete(id));
+  const qAll = () => tx("readonly", (s) => s.getAll());
+  async function refreshQueue() { const n = (await qAll()).length; $("queue").textContent = n; $("queue").className = n ? "warn" : "ok"; return n; }
+
+  // ------------------------------------------------------------ API helpers
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (deviceToken) headers["Authorization"] = "Bearer " + deviceToken;
+    const r = await fetch(path, Object.assign({}, opts, { headers }));
+    if (!r.ok) { let d = r.statusText; try { d = (await r.json()).detail; } catch (e) {} const err = new Error(d); err.status = r.status; throw err; }
+    return r.json();
+  }
+  const sha256 = async (blob) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()))].map(b => b.toString(16).padStart(2, "0")).join("");
+
+  // ------------------------------------------------------------ pairing
+  async function pair() {
+    const token = new URLSearchParams(location.search).get("token");
+    if (deviceToken) return true;
+    if (!token) { document.body.innerHTML = "<p style='padding:20px'>Scan the QR code shown in the observation app to pair this phone.</p>"; return false; }
+    $("signin").classList.remove("hidden");
+    return new Promise((resolve) => {
+      $("signinBtn").onclick = async () => {
+        const email = $("email").value.trim();
+        if (!email) return;
+        document.cookie = "ic_user=" + encodeURIComponent(email) + "; path=/; SameSite=Strict; Secure";
+        try {
+          const r = await api("/api/pair/redeem", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+          deviceToken = r.device_token; sessionStorage.setItem("ic_device_token", deviceToken);
+          history.replaceState(null, "", "/pair");
+          $("signin").classList.add("hidden"); resolve(true);
+        } catch (e) { $("signinErr").textContent = e.message; }
+      };
+    });
+  }
+
+  async function loadMe() {
+    try {
+      const me = await api("/api/device/me");
+      $("sessName").textContent = `${me.session.client} – ${me.session.location}`;
+      $("observer").textContent = me.observer;
+      $("activeRec").textContent = me.active_record ? `${me.active_record.type} ${me.active_record.label}` : "no record open on the laptop (goes to the tray)";
+      const zsel = $("zone"), cur = zsel.value;
+      if (zsel.options.length - 1 !== me.zones.length) { zsel.innerHTML = '<option value="">(none)</option>' + me.zones.map(z => `<option>${z}</option>`).join(""); zsel.value = cur; }
+      if (me.session.status !== "open") { log("Session is " + me.session.status + "; captures are disabled", "bad"); ["photoBtn", "burstBtn", "clipBtn"].forEach(id => $(id).disabled = true); }
+    } catch (e) { if (e.status === 403 || e.status === 401) { sessionStorage.removeItem("ic_device_token"); log("Phone is no longer paired", "bad"); } }
+  }
+
+  // ------------------------------------------------------------ camera
+  async function startCamera() {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 4032 }, height: { ideal: 3024 } } });
+    $("video").srcObject = stream;
+    ["photoBtn", "burstBtn", "clipBtn"].forEach(id => $(id).disabled = false);
+    try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { log("Keep the screen on: wake lock unavailable", "warn"); }
+    if (typeof DeviceMotionEvent !== "undefined" && DeviceMotionEvent.requestPermission) { try { await DeviceMotionEvent.requestPermission(); } catch (e) {} }
+    window.addEventListener("devicemotion", (ev) => {
+      const a = ev.rotationRate || {}; const m = Math.abs(a.alpha || 0) + Math.abs(a.beta || 0) + Math.abs(a.gamma || 0);
+      steady = m < 25; $("steady").textContent = steady ? "Steady" : "Hold steady…"; $("steady").className = steady ? "ok" : "warn";
+    });
+    $("steady").textContent = "Steady";
+    if ("BarcodeDetector" in window) scanBarcodes();
+  }
+  document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && stream && !wakeLock) { try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {} } });
+
+  async function scanBarcodes() {
+    const det = new BarcodeDetector();
+    setInterval(async () => {
+      if (!stream || $("bin").value) return;
+      try { const codes = await det.detect($("video")); if (codes.length) { $("bin").value = codes[0].rawValue; log("Read bin code " + codes[0].rawValue); } } catch (e) {}
+    }, 1500);
+  }
+
+  function frameToCanvas(scale = 1) {
+    const v = $("video"), c = document.createElement("canvas");
+    c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height); return c;
+  }
+  async function grabPhoto() {
+    const track = stream.getVideoTracks()[0];
+    if ("ImageCapture" in window) { try { return await new ImageCapture(track).takePhoto(); } catch (e) {} }
+    return new Promise(res => frameToCanvas(1).toBlob(res, "image/jpeg", 0.92));
+  }
+  // Sharpness = variance of a Laplacian on a small greyscale copy.
+  async function sharpness(blob) {
+    const bmp = await createImageBitmap(blob); const w = 320, h = Math.round(bmp.height * 320 / bmp.width);
+    const c = new OffscreenCanvas(w, h), g = c.getContext("2d"); g.drawImage(bmp, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data, grey = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) grey[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    let sum = 0, sq = 0, n = 0;
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; const l = grey[i - 1] + grey[i + 1] + grey[i - w] + grey[i + w] - 4 * grey[i]; sum += l; sq += l * l; n++; }
+    return sq / n - (sum / n) ** 2;
+  }
+
+  async function enqueue(blob, kind, extra = {}) {
+    const item = { id: crypto.randomUUID(), blob, kind, media_type: blob.type, sha256: await sha256(blob), capture_time: new Date().toISOString(), zone: $("zone").value, bin_code: $("bin").value, ...extra };
+    await qPut(item); await refreshQueue();
+    if (kind === "photo") { const img = document.createElement("img"); img.src = URL.createObjectURL(blob); $("thumbs").prepend(img); }
+    log(`${kind} captured, hash ${item.sha256.slice(0, 12)}…`);
+    $("bin").value = "";
+    upload();
+  }
+
+  $("photoBtn").onclick = async () => { if (!steady) log("Phone was moving; consider Burst", "warn"); await enqueue(await grabPhoto(), "photo"); };
+  $("burstBtn").onclick = async () => {
+    const frames = [];
+    for (let i = 0; i < 3; i++) { frames.push(await new Promise(res => frameToCanvas(1).toBlob(res, "image/jpeg", 0.92))); await new Promise(r => setTimeout(r, 300)); }
+    const scores = await Promise.all(frames.map(sharpness)); const best = scores.indexOf(Math.max(...scores));
+    await enqueue(frames[best], "photo", { burst_frames: 3 });
+  };
+
+  let recorder = null, recStart = 0, recTimer = null;
+  $("clipBtn").onclick = () => {
+    if (recorder) { const secs = (Date.now() - recStart) / 1000; if (secs < 5) { log("Clips need at least 5 seconds", "warn"); return; } recorder.stop(); return; }
+    const types = ["video/mp4", "video/webm;codecs=vp9", "video/webm"]; const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || "";
+    const chunks = []; recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8_000_000 } : {});
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.onstop = async () => {
+      clearInterval(recTimer); $("rec").style.display = "none"; $("clipBtn").textContent = "Clip";
+      const secs = Math.min(30, (Date.now() - recStart) / 1000); const blob = new Blob(chunks, { type: (recorder.mimeType || "video/webm").split(";")[0] });
+      recorder = null; await enqueue(blob, "clip", { duration_seconds: Math.round(secs * 10) / 10 });
+    };
+    recorder.start(1000); recStart = Date.now(); $("rec").style.display = "block"; $("clipBtn").textContent = "Stop";
+    recTimer = setInterval(() => { const s = Math.floor((Date.now() - recStart) / 1000); $("recSecs").textContent = s; if (s >= 30) recorder && recorder.stop(); }, 250);
+  };
+
+  // ------------------------------------------------------------ uploader
+  async function upload() {
+    if (uploading || !deviceToken) return; uploading = true;
+    try {
+      for (const item of await qAll()) {
+        const fd = new FormData();
+        fd.append("file", new File([item.blob], item.id, { type: item.media_type }));
+        for (const k of ["sha256", "kind", "capture_time", "zone", "bin_code", "duration_seconds", "burst_frames"]) if (item[k] !== undefined && item[k] !== "") fd.append(k, item[k]);
+        try {
+          const r = await api("/api/capture", { method: "POST", body: fd });
+          await qDel(item.id); log(`uploaded ${r.evidence_id}`, "ok");
+        } catch (e) {
+          if (e.status === 422) { log("Server rejected a capture (hash mismatch); it stays queued for support", "bad"); continue; }
+          if (e.status === 409 || e.status === 400) { log("Upload refused: " + e.message, "bad"); continue; }
+          log("Offline, will retry: " + e.message, "warn"); break;
+        }
+      }
+    } finally { uploading = false; await refreshQueue(); }
+  }
+  window.addEventListener("online", upload);
+  setInterval(upload, 10000);
+
+  async function heartbeat() {
+    let level = null;
+    try { const b = await navigator.getBattery(); level = b.level; $("battery").textContent = "Battery " + Math.round(level * 100) + "%"; $("battery").className = level <= 0.3 ? "bad" : ""; if (level <= 0.3) log("Battery at or below 30%: connect a power bank", "warn"); } catch (e) {}
+    try { await api("/api/device/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ battery_level: level, queued_uploads: await refreshQueue() }) }); } catch (e) {}
+    loadMe();
+  }
+
+  $("unpairBtn").onclick = async () => {
+    if ((await refreshQueue()) > 0 && !confirm("Captures are still queued. Unpair anyway? They stay on this phone until it pairs again.")) return;
+    try { await api("/api/device/unpair", { method: "POST" }); } catch (e) {}
+    sessionStorage.removeItem("ic_device_token"); deviceToken = null; stream && stream.getTracks().forEach(t => t.stop());
+    document.body.innerHTML = "<p style='padding:20px'>Phone unpaired.</p>";
+  };
+  $("ackNotice").onclick = async () => { $("notice").classList.add("hidden"); try { await startCamera(); } catch (e) { log("Camera unavailable: " + e.message, "bad"); } };
+
+  (async () => {
+    if (!(await pair())) return;
+    $("main").classList.remove("hidden");
+    await refreshQueue(); await loadMe(); heartbeat(); setInterval(heartbeat, 15000); upload();
+  })();
+})();
+</script>
+</body>
+</html>

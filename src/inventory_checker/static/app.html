@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory Observation</title>
+<style>
+  :root { --bg:#f5f7fb; --panel:#fff; --ink:#152033; --muted:#5d6b82; --line:#dfe4ee; --accent:#00338d; --amber:#fff1c7; --amberInk:#8a5a00; --red:#c62828; --green:#1f8a4c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { background:var(--accent); color:#fff; padding:10px 18px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; }
+  main { padding:16px; max-width:1400px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns: minmax(0,2fr) minmax(280px,1fr); gap:14px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  h2 { font-size:15px; margin:0 0 10px; }
+  label { display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
+  input, select, textarea { width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:7px; font:inherit; background:#fff; color:var(--ink); }
+  textarea { min-height:70px; }
+  .fields { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:8px; }
+  button { padding:7px 12px; border-radius:7px; border:1px solid var(--accent); background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--accent); }
+  button.small { padding:3px 8px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:6px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--muted); font-weight:600; }
+  tr.amber td { background:var(--amber); }
+  tr.active td { outline:2px solid var(--accent); outline-offset:-2px; }
+  tr.drop td { background:#e6eeff; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:12px; flex-wrap:wrap; }
+  .tabs button { background:none; color:var(--muted); border:0; border-bottom:3px solid transparent; border-radius:0; }
+  .tabs button.on { color:var(--accent); border-bottom-color:var(--accent); }
+  #tray { display:flex; flex-wrap:wrap; gap:8px; }
+  .thumb { width:110px; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:#fafbfe; font-size:11px; cursor:grab; }
+  .thumb img, .thumb video { width:110px; height:90px; object-fit:cover; display:block; background:#000; }
+  .thumb div { padding:3px 5px; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:99px; font-size:11px; background:#eef1f7; color:var(--muted); }
+  .pill.warn { background:var(--amber); color:var(--amberInk); }
+  .pill.bad { background:#fde3e3; color:var(--red); }
+  .pill.ok { background:#dff3e7; color:var(--green); }
+  .muted { color:var(--muted); }
+  .err { color:var(--red); }
+  .hidden { display:none !important; }
+  #qr svg { width:220px; height:220px; }
+  #chatlog { max-height:340px; overflow:auto; border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; background:#fafbfe; }
+  #chatlog .u { font-weight:600; margin-top:6px; }
+  .approval { border:1px dashed var(--accent); border-radius:8px; padding:6px; margin:6px 0; background:#fff; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #toast { position:fixed; bottom:16px; right:16px; background:var(--ink); color:#fff; padding:10px 14px; border-radius:8px; display:none; max-width:420px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Inventory Observation</h1>
+  <div class="row"><span id="whoami"></span><select id="sessionPick" style="width:auto"></select><button class="ghost small" id="newSessBtn">New session</button></div>
+</header>
+<main>
+  <div id="signin" class="card hidden">
+    <h2>Sign in</h2>
+    <p class="muted">Development sign-in. Production deployments sit behind the firm's SSO.</p>
+    <div class="row"><input id="email" type="email" placeholder="you@firm.com" style="max-width:320px"><button id="signinBtn">Sign in</button></div>
+  </div>
+
+  <div id="newSess" class="card hidden">
+    <h2>Plan an observation session</h2>
+    <div class="fields">
+      <div><label>Engagement<input id="ns_engagement"></label></div>
+      <div><label>Client<input id="ns_client"></label></div>
+      <div><label>Location<input id="ns_location"></label></div>
+      <div><label>Count date<input id="ns_count_date" type="date"></label></div>
+      <div><label>Observers (emails, comma separated)<input id="ns_observers"></label></div>
+      <div><label>Tolerance (units)<input id="ns_tolerance_units" type="number" value="0"></label></div>
+      <div><label>Tolerance (%)<input id="ns_tolerance_pct" type="number" value="0"></label></div>
+      <div><label>Random sample size<input id="ns_sample_size" type="number" value="10"></label></div>
+      <div><label>Value threshold (all items over)<input id="ns_sample_value_threshold" type="number"></label></div>
+    </div>
+    <label style="margin-top:8px">Client count instructions<textarea id="ns_count_instructions"></textarea></label>
+    <button id="createSessBtn">Create session</button>
+  </div>
+
+  <div id="sessionView" class="hidden">
+    <div class="card row" style="justify-content:space-between">
+      <div><b id="sv_title"></b> <span id="sv_status" class="pill"></span><div class="muted" id="sv_meta"></div></div>
+      <div class="row"><span id="devices" class="muted"></span><button id="pairBtn">Pair phone</button></div>
+    </div>
+    <div id="qrCard" class="card hidden row">
+      <div id="qr"></div>
+      <div><b>Scan with your phone's camera.</b><p class="muted">One-time code, valid 5 minutes. The phone signs in and becomes this session's camera.</p><code id="qrUrl" class="muted"></code><br><button class="ghost small" id="qrClose">Close</button></div>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <div class="tabs" id="tabs">
+            <button data-tab="test_count" class="on">Test counts</button>
+            <button data-tab="procedure_observation">Procedures</button>
+            <button data-tab="condition_note">Conditions</button>
+            <button data-tab="cutoff_document">Cutoff</button>
+            <button data-tab="tag_control">Tag control</button>
+            <button data-tab="plan">Listing &amp; sample</button>
+            <button data-tab="close">Close &amp; export</button>
+            <button data-tab="review">Review</button>
+          </div>
+          <div id="formArea"></div>
+          <div id="recordsArea" style="margin-top:12px"></div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h2>Evidence tray <span class="muted" id="trayCount"></span></h2>
+          <p class="muted" style="margin-top:-6px">New captures attach to the highlighted record. Drag a capture onto a record row to move it.</p>
+          <div id="tray"></div>
+        </div>
+        <div class="card"><h2>Coverage by zone</h2><div id="coverage"></div>
+          <div class="row" style="margin-top:8px"><input id="zoneCode" placeholder="Zone code" style="max-width:140px"><input id="zoneDesc" placeholder="Description"><button class="small" id="addZoneBtn">Add zone</button></div></div>
+        <div class="card" id="copilotCard"><h2>Copilot</h2>
+          <div id="chatlog"><span class="muted">Ask about the sample, open items or coverage, or dictate an observation. Every record the copilot drafts needs your approval.</span></div>
+          <div class="row"><input id="chatIn" placeholder="e.g. Counted 48 cases of SKU A-100 at tag 1043, zone B"><button id="chatBtn">Send</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const toast = (m) => { const t = $("toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 5000); };
+  async function api(path, opts = {}) {
+    const o = Object.assign({ headers: {} }, opts);
+    if (o.json !== undefined) { o.body = JSON.stringify(o.json); o.headers["Content-Type"] = "application/json"; o.method = o.method || "POST"; }
+    const r = await fetch(path, o);
+    const ct = r.headers.get("content-type") || "";
+    const body = ct.includes("json") ? await r.json() : await r.text();
+    if (!r.ok) { const e = new Error(typeof body === "object" ? (body.detail || body.message || JSON.stringify(body)) : body); e.body = body; e.status = r.status; throw e; }
+    return body;
+  }
+
+  let me = null, sid = null, tab = "test_count", records = [], evidence = [], activeRecord = null, suggestion = null;
+
+  // ------------------------------------------------------------------ forms per record type
+  const FORMS = {
+    test_count: [["direction", "select", ["floor_to_sheet", "sheet_to_floor"]], ["zone", "zone"], ["sku", "text"], ["tag_no", "text"], ["auditor_count", "number"], ["client_count", "number", "from listing if blank"], ["explanation", "text"]],
+    procedure_observation: [["area", "select", ["instructions", "segregation", "movement_freeze", "tag_control"]], ["compliant", "select", ["yes", "no", "n/a"]], ["note", "text"]],
+    condition_note: [["condition", "select", ["damaged", "obsolete", "slow_moving", "consigned"]], ["zone", "zone"], ["sku", "text"], ["estimated_quantity", "number"], ["note", "text"]],
+    cutoff_document: [["type", "select", ["receiving", "shipping"]], ["document_no", "text"], ["date", "date"], ["last_before_count", "select", ["true", "false"]]],
+    tag_control: [["range_start", "number"], ["range_end", "number"], ["used", "list"], ["unused", "list", "blank = not recorded yet"], ["voided", "list"]],
+  };
+  const COLS = {
+    test_count: ["sku", "tag_no", "zone", "direction", "client_count", "auditor_count", "difference", "explanation"],
+    procedure_observation: ["area", "compliant", "note"], condition_note: ["condition", "zone", "sku", "estimated_quantity", "note"],
+    cutoff_document: ["type", "document_no", "date", "last_before_count"], tag_control: ["range_start", "range_end", "used", "unused", "voided"],
+  };
+  let zones = [];
+
+  function renderForm() {
+    const area = $("formArea");
+    if (tab === "plan") return renderPlan();
+    if (tab === "close") return renderClose();
+    if (tab === "review") return renderReview();
+    const f = FORMS[tab];
+    area.innerHTML = `<div class="fields">${f.map(([k, t, extra]) => {
+      let input;
+      if (t === "select") input = `<select id="f_${k}">${extra.map(o => `<option>${o}</option>`).join("")}</select>`;
+      else if (t === "zone") input = `<select id="f_${k}"><option value="">(none)</option>${zones.map(z => `<option>${esc(z)}</option>`).join("")}</select>`;
+      else input = `<input id="f_${k}" type="${t === "number" ? "number" : t === "date" ? "date" : "text"}" placeholder="${t === "list" ? "e.g. 1001-1050, 1052" : esc(extra || "")}">`;
+      return `<div><label>${k.replace(/_/g, " ")}${input}</label></div>`;
+    }).join("")}</div>
+    <div class="row" style="margin-top:8px"><button id="saveRec">Save record</button><span class="muted" id="sugInfo"></span></div>`;
+    for (const [k] of f) { const el = $("f_" + k); el.dataset.src = "typed"; el.addEventListener("input", () => { if (el.dataset.src === "accepted") el.dataset.src = "edited"; }); }
+    $("saveRec").onclick = saveRecord;
+    if (suggestion) applySuggestion(suggestion);
+  }
+
+  function readForm() {
+    const data = {}, sources = {};
+    for (const [k, t] of FORMS[tab]) {
+      const el = $("f_" + k); let v = el.value.trim();
+      if (v === "") { data[k] = t === "list" ? (k === "unused" ? null : []) : null; continue; }
+      if (t === "number") v = Number(v);
+      if (t === "list") v = v.split(",").map(s => s.trim()).filter(Boolean);
+      if (k === "last_before_count") v = v === "true";
+      data[k] = v; sources[k] = el.dataset.src || "typed";
+    }
+    return { data, sources };
+  }
+
+  async function saveRecord() {
+    const { data, sources } = readForm();
+    try {
+      const rec = await api(`/api/sessions/${sid}/records`, { json: { type: tab, data, field_sources: sources, suggestion_id: suggestion ? suggestion.id : null, evidence_ids: suggestion ? [suggestion.evidence_id] : [] } });
+      activeRecord = rec.id; suggestion = null; toast("Saved " + rec.id + (rec.data.over_tolerance ? " – difference over tolerance: add an explanation" : ""));
+      renderForm(); await refresh();
+    } catch (e) { toast(e.message); }
+  }
+
+  function applySuggestion(s) {
+    const x = s.extract, map = { sku: x.skus && x.skus[0], tag_no: x.tag_numbers && x.tag_numbers[0], auditor_count: x.suggested_count, zone: null };
+    for (const [k, v] of Object.entries(map)) { const el = $("f_" + k); if (el && v !== null && v !== undefined && v !== "") { el.value = v; el.dataset.src = "accepted"; el.style.background = "#eef4ff"; } }
+    $("sugInfo").innerHTML = `AI draft from ${esc(s.evidence_id)} (confidence ${Math.round((x.confidence || 0) * 100)}%${x.blurry ? ", blurry" : ""}${x.glare ? ", glare" : ""}). ${esc(x.count_basis || "")} Check every field before saving.`;
+  }
+
+  function renderRecords() {
+    if (!FORMS[tab]) { $("recordsArea").innerHTML = ""; return; }
+    const rows = records.filter(r => r.type === tab), cols = COLS[tab];
+    $("recordsArea").innerHTML = `<table><thead><tr><th>Record</th>${cols.map(c => `<th>${c.replace(/_/g, " ")}</th>`).join("")}<th>Evidence</th><th>Review</th><th></th></tr></thead><tbody>${rows.map(r => {
+      const d = r.data; const cls = [d.over_tolerance && !d.explanation ? "amber" : "", r.id === activeRecord ? "active" : ""].join(" ");
+      return `<tr class="${cls}" data-rid="${r.id}"><td><a href="#" data-act="${r.id}">${r.id}</a><br><span class="muted">v${r.version}</span></td>${cols.map(c => {
+        let v = d[c]; if (Array.isArray(v)) v = v.join(", "); if (v === null || v === undefined) v = c === "unused" ? "<span class='pill warn'>not recorded</span>" : "";
+        else v = esc(v);
+        const src = r.field_sources[c]; return `<td>${v}${src && src !== "typed" ? ` <span class="pill">${src}</span>` : ""}</td>`;
+      }).join("")}<td>${r.evidence.length ? `<span class="pill ok">${r.evidence.length}</span>` : `<span class="pill bad">none</span>`}</td><td><span class="pill ${r.review_status === "approved" ? "ok" : r.review_status === "queried" || r.review_status === "rejected" ? "bad" : ""}">${r.review_status}</span></td><td><button class="ghost small" data-fix="${r.id}">Correct</button></td></tr>`;
+    }).join("")}</tbody></table>`;
+    $("recordsArea").querySelectorAll("[data-act]").forEach(a => a.onclick = async (e) => { e.preventDefault(); setActive(a.dataset.act); });
+    $("recordsArea").querySelectorAll("[data-fix]").forEach(b => b.onclick = () => correct(b.dataset.fix));
+    $("recordsArea").querySelectorAll("tr[data-rid]").forEach(tr => {
+      tr.ondragover = (e) => { e.preventDefault(); tr.classList.add("drop"); };
+      tr.ondragleave = () => tr.classList.remove("drop");
+      tr.ondrop = async (e) => { e.preventDefault(); tr.classList.remove("drop"); const [eid, from] = e.dataTransfer.getData("text/plain").split("|");
+        try { await api(`/api/evidence/${eid}/link`, { json: { record_id: tr.dataset.rid, move_from: from || null } }); toast(`Moved ${eid} to ${tr.dataset.rid}`); refresh(); } catch (err) { toast(err.message); } };
+    });
+  }
+
+  async function setActive(rid) { activeRecord = rid; await api(`/api/sessions/${sid}/active-record`, { json: { record_id: rid } }); renderRecords(); toast("Phone captures now attach to " + rid); }
+
+  async function correct(rid) {
+    const r = records.find(x => x.id === rid); const field = prompt("Field to correct (" + Object.keys(r.data).filter(k => !["difference", "over_tolerance"].includes(k)).join(", ") + ")"); if (!field) return;
+    let value = prompt(`New value for ${field} (current: ${JSON.stringify(r.data[field])})`); if (value === null) return;
+    const reason = prompt("Reason for the correction (kept in the record's history)"); if (!reason) return;
+    if (typeof r.data[field] === "number") value = Number(value);
+    try { await api(`/api/records/${rid}/corrections`, { json: { changes: { [field]: value }, reason } }); toast("New version saved"); refresh(); } catch (e) { toast(e.message); }
+  }
+
+  function renderTray() {
+    $("trayCount").textContent = `(${evidence.length})`;
+    $("tray").innerHTML = evidence.slice().reverse().map(e => `<div class="thumb" draggable="true" data-eid="${e.id}" data-from="${e.record_ids[0] || ""}">
+      ${e.kind === "clip" ? `<video src="/api/evidence/${e.id}/content" muted preload="metadata"></video>` : `<img loading="lazy" src="/api/evidence/${e.id}/content">`}
+      <div>${esc(e.id)}<br>${e.record_ids.length ? esc(e.record_ids.join(", ")) : "<span class='pill warn'>unlinked</span>"}
+      ${Math.abs(e.clock_gap_seconds) > 120 ? `<br><span class="pill warn">queued ${Math.round(e.clock_gap_seconds / 60)} min</span>` : ""}
+      ${e.kind === "photo" && me.ai_assist ? `<br><button class="ghost small" data-sug="${e.id}">AI read</button>` : ""}</div></div>`).join("");
+    $("tray").querySelectorAll(".thumb").forEach(t => t.ondragstart = (ev) => ev.dataTransfer.setData("text/plain", t.dataset.eid + "|" + t.dataset.from));
+    $("tray").querySelectorAll("[data-sug]").forEach(b => b.onclick = async () => {
+      b.disabled = true; b.textContent = "Reading…";
+      try { suggestion = await api(`/api/evidence/${b.dataset.sug}/suggest`, { method: "POST" }); tab = "test_count"; setTab(); toast("AI draft loaded into the test count form – confirm or edit before saving"); }
+      catch (e) { toast(e.message); } finally { b.disabled = false; b.textContent = "AI read"; }
+    });
+  }
+
+  async function renderPlan() {
+    const listing = await api(`/api/sessions/${sid}/listing`);
+    $("formArea").innerHTML = `<label>Import perpetual listing (CSV: sku, description, location, uom, quantity, unit_cost)<input type="file" id="listingFile" accept=".csv,text/csv"></label>
+      <div class="row"><button id="sampleBtn">Draw sheet-to-floor sample</button><span class="muted">${listing.length} item(s) in listing, ${listing.filter(i => i.sampled).length} sampled</span></div>
+      <table style="margin-top:10px"><thead><tr><th>SKU</th><th>Description</th><th>Location</th><th>UOM</th><th>Qty</th><th>Unit cost</th><th>Sample</th></tr></thead><tbody>
+      ${listing.map(i => `<tr><td>${esc(i.sku)}</td><td>${esc(i.description)}</td><td>${esc(i.location)}</td><td>${esc(i.uom)}</td><td>${i.quantity}</td><td>${i.unit_cost}</td><td>${i.sampled ? `<span class="pill ok">${i.sample_reason}</span>` : ""}</td></tr>`).join("")}</tbody></table>`;
+    $("listingFile").onchange = async (e) => { const txt = await e.target.files[0].text(); try { const r = await api(`/api/sessions/${sid}/listing`, { json: { csv: txt } }); toast(`Imported ${r.imported} rows`); renderPlan(); } catch (err) { toast(err.message); } };
+    $("sampleBtn").onclick = async () => { try { const r = await api(`/api/sessions/${sid}/sample`, { json: {} }); toast(`${r.length} item(s) selected`); renderPlan(); } catch (e) { toast(e.message); } };
+  }
+
+  async function renderClose() {
+    const items = await api(`/api/sessions/${sid}/open-items`);
+    $("formArea").innerHTML = `<h2>Open items</h2>${items.length ? `<table><tbody>${items.map(i => `<tr><td><span class="pill ${i.blocking ? "bad" : "warn"}">${i.kind.replace(/_/g, " ")}</span></td><td>${esc(i.message)}</td><td style="width:40%">${i.blocking ? "<span class='muted'>must be resolved</span>" : `<input data-key="${esc(i.key)}" placeholder="Explanation">`}</td></tr>`).join("")}</tbody></table>` : "<p class='muted'>No open items.</p>"}
+      <div class="row" style="margin-top:10px"><button id="closeBtn">Close and lock session</button></div>
+      <h2 style="margin-top:16px">Exports</h2>
+      <div class="row"><a href="/api/sessions/${sid}/export/schedule.xlsx"><button class="ghost">Excel workbook</button></a><a href="/api/sessions/${sid}/export/schedule.csv"><button class="ghost">Test-count schedule CSV</button></a><a href="/api/sessions/${sid}/export/memo.md"><button class="ghost">Memo draft</button></a><a href="/api/sessions/${sid}/export/package.zip"><button class="ghost">Evidence package</button></a></div>`;
+    $("closeBtn").onclick = async () => {
+      const explanations = {}; $("formArea").querySelectorAll("[data-key]").forEach(i => { if (i.value.trim()) explanations[i.dataset.key] = i.value.trim(); });
+      try { const r = await api(`/api/sessions/${sid}/close`, { json: { explanations } }); toast(r.message); refresh(); renderClose(); } catch (e) { toast(e.message); }
+    };
+  }
+
+  async function renderReview() {
+    const isLead = me.user === session.session.lead;
+    $("formArea").innerHTML = `<p class="muted">${isLead ? "Approve each record, or query it back to the observer with a comment." : "Only the engagement lead reviews."}</p>
+      <table><thead><tr><th>Record</th><th>Data</th><th>Evidence</th><th>Status</th><th></th></tr></thead><tbody>${records.map(r => `<tr><td>${r.id}<br><span class="muted">${r.type} v${r.version}</span></td><td><code style="font-size:11px">${esc(JSON.stringify(r.data))}</code></td>
+      <td>${r.evidence.map(e => `<a target="_blank" href="/api/evidence/${e}/content"><img src="/api/evidence/${e}/content" style="width:56px;height:56px;object-fit:cover;border-radius:6px" onerror="this.replaceWith(document.createTextNode('${e}'))"></a>`).join(" ")}</td>
+      <td><span class="pill">${r.review_status}</span>${r.reviews.map(v => `<div class="muted" style="font-size:11px">${v.action}: ${esc(v.comment)}</div>`).join("")}</td>
+      <td>${isLead ? `<button class="small" data-rv="approve" data-id="${r.id}">Approve</button> <button class="ghost small" data-rv="query" data-id="${r.id}">Query</button>` : ""}</td></tr>`).join("")}</tbody></table>
+      ${isLead ? `<div class="row" style="margin-top:10px"><button id="signOff">Sign off session</button></div>` : ""}`;
+    $("formArea").querySelectorAll("[data-rv]").forEach(b => b.onclick = async () => {
+      const comment = b.dataset.rv === "query" ? prompt("Query for the observer") : ""; if (comment === null) return;
+      try { await api(`/api/records/${b.dataset.id}/review`, { json: { action: b.dataset.rv, comment } }); await refresh(); renderReview(); } catch (e) { toast(e.message); }
+    });
+    if ($("signOff")) $("signOff").onclick = async () => { try { await api(`/api/sessions/${sid}/sign-off`, { method: "POST" }); toast("Session signed off and locked"); refresh(); } catch (e) { toast(e.message); } };
+  }
+
+  // ------------------------------------------------------------------ copilot
+  function chatAdd(html, cls = "") { const d = document.createElement("div"); d.className = cls; d.innerHTML = html; $("chatlog").appendChild(d); $("chatlog").scrollTop = 1e9; }
+  async function chat(body) {
+    try {
+      const r = await api(`/api/sessions/${sid}/copilot`, { json: body });
+      if (r.reply) chatAdd(esc(r.reply).replace(/\n/g, "<br>"));
+      for (const p of r.pending_approvals) {
+        const d = document.createElement("div"); d.className = "approval";
+        d.innerHTML = `<b>Draft: ${esc(p.tool)}</b><br><code>${esc(JSON.stringify(p.arguments))}</code><div class="row"><button class="small">Approve &amp; save</button><button class="ghost small">Reject</button></div>`;
+        const [ok, no] = d.querySelectorAll("button");
+        ok.onclick = () => { d.remove(); chat({ approvals: [{ request_id: p.request_id, approved: true }] }).then(refresh); };
+        no.onclick = () => { d.remove(); chat({ approvals: [{ request_id: p.request_id, approved: false }] }); };
+        $("chatlog").appendChild(d);
+      }
+    } catch (e) { chatAdd(esc(e.message), "err"); }
+  }
+  $("chatBtn").onclick = () => { const m = $("chatIn").value.trim(); if (!m) return; $("chatIn").value = ""; chatAdd(esc(m), "u"); chat({ message: m }); };
+  $("chatIn").onkeydown = (e) => { if (e.key === "Enter") $("chatBtn").click(); };
+
+  // ------------------------------------------------------------------ session plumbing
+  let session = null;
+  async function refresh() {
+    if (!sid) return;
+    try {
+      [session, records, evidence] = await Promise.all([api(`/api/sessions/${sid}`), api(`/api/sessions/${sid}/records`), api(`/api/sessions/${sid}/evidence`)]);
+      const s = session.session; zones = session.zones;
+      $("sv_title").textContent = `${s.client} – ${s.location}`;
+      $("sv_status").textContent = s.status; $("sv_status").className = "pill " + (s.status === "open" ? "ok" : "warn");
+      $("sv_meta").textContent = `${s.engagement} · count ${s.count_date} · lead ${s.lead} · ${session.open_items.length} open item(s)`;
+      $("devices").innerHTML = session.devices.map(d => `📱 ${esc(d.user)} ${d.battery_level != null ? Math.round(d.battery_level * 100) + "%" : ""} ${d.queued_uploads ? `<span class="pill warn">${d.queued_uploads} queued</span>` : ""} <button class="ghost small" data-unpair="${d.id}">Unpair</button>`).join(" ") || "No phone paired";
+      $("devices").querySelectorAll("[data-unpair]").forEach(b => b.onclick = async () => { await api(`/api/devices/${b.dataset.unpair}`, { method: "DELETE" }); refresh(); });
+      const cov = await api(`/api/sessions/${sid}/coverage`);
+      $("coverage").innerHTML = `<table><thead><tr><th>Zone</th><th>Counts</th><th>Obs.</th><th>Captures</th></tr></thead><tbody>${Object.entries(cov).map(([z, c]) => `<tr class="${c.test_counts + c.observations + c.captures === 0 ? "amber" : ""}"><td>${esc(z)}</td><td>${c.test_counts}</td><td>${c.observations}</td><td>${c.captures}</td></tr>`).join("")}</tbody></table>`;
+      renderRecords(); renderTray();
+    } catch (e) { toast(e.message); }
+  }
+  function setTab() { document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab)); renderForm(); renderRecords(); }
+  document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { tab = b.dataset.tab; setTab(); });
+
+  async function loadSessions(select) {
+    const list = await api("/api/sessions");
+    $("sessionPick").innerHTML = `<option value="">Select session…</option>` + list.map(s => `<option value="${s.id}">${esc(s.client)} – ${esc(s.location)} (${s.count_date})</option>`).join("");
+    if (select) $("sessionPick").value = select;
+  }
+  $("sessionPick").onchange = async () => { sid = $("sessionPick").value || null; $("newSess").classList.add("hidden"); $("sessionView").classList.toggle("hidden", !sid); activeRecord = null; if (sid) { await refresh(); setTab(); } };
+  $("newSessBtn").onclick = () => { $("newSess").classList.toggle("hidden"); };
+  $("createSessBtn").onclick = async () => {
+    const body = {}; for (const k of ["engagement", "client", "location", "count_date", "count_instructions", "tolerance_units", "tolerance_pct", "sample_size", "sample_value_threshold"]) { const v = $("ns_" + k).value.trim(); if (v !== "") body[k] = ["tolerance_units", "tolerance_pct", "sample_size", "sample_value_threshold"].includes(k) ? Number(v) : v; }
+    body.observers = $("ns_observers").value.split(",").map(s => s.trim()).filter(Boolean);
+    try { const s = await api("/api/sessions", { json: body }); $("newSess").classList.add("hidden"); await loadSessions(s.id); $("sessionPick").onchange(); } catch (e) { toast(e.message); }
+  };
+  $("addZoneBtn").onclick = async () => { try { await api(`/api/sessions/${sid}/zones`, { json: { code: $("zoneCode").value.trim(), description: $("zoneDesc").value.trim() } }); $("zoneCode").value = $("zoneDesc").value = ""; await refresh(); renderForm(); } catch (e) { toast(e.message); } };
+  $("pairBtn").onclick = async () => { try { const r = await api(`/api/sessions/${sid}/pairing`, { method: "POST" }); $("qr").innerHTML = r.qr_svg; $("qrUrl").textContent = r.url; $("qrCard").classList.remove("hidden"); } catch (e) { toast(e.message); } };
+  $("qrClose").onclick = () => $("qrCard").classList.add("hidden");
+
+  $("signinBtn").onclick = () => { document.cookie = "ic_user=" + encodeURIComponent($("email").value.trim()) + "; path=/; SameSite=Strict"; boot(); };
+  async function boot() {
+    try { me = await api("/api/me"); } catch (e) { $("signin").classList.remove("hidden"); return; }
+    $("signin").classList.add("hidden"); $("whoami").textContent = me.user + (me.ai_assist ? " · AI assist on" : " · AI assist off");
+    if (!me.ai_assist) $("copilotCard").classList.add("hidden");
+    await loadSessions();
+    setInterval(refresh, 3000);
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

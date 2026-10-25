@@ -1,0 +1,14 @@
+sku,description,location,uom,quantity,unit_cost
+RM-1001,Steel coil 1.2mm,A-01-01,KG,5200,1.85
+RM-1002,Aluminium sheet 2mm,A-01-02,EA,640,22.40
+RM-1003,Copper wire 4mm,A-02-01,M,12000,0.95
+RM-1004,Polymer pellets grade B,A-02-02,KG,8800,1.10
+RM-1005,Fasteners M8 box of 500,A-03-01,BOX,310,14.00
+FG-2001,Industrial pump P-200,B-01-01,EA,42,1850.00
+FG-2002,Valve assembly V-50,B-01-02,EA,260,145.00
+FG-2003,Control panel CP-10,B-02-01,EA,18,4200.00
+FG-2004,Filter cartridge F-12 case of 24,B-02-02,CS,96,312.00
+FG-2005,Hose kit HK-3,B-03-01,EA,510,38.50
+FG-2006,Motor M-75 7.5kW,B-03-02,EA,24,2650.00
+FG-2007,Gasket set GS-9,B-04-01,EA,1400,6.20
+QA-3001,Returned pump P-200 (damaged),Q-01-01,EA,3,1850.00
