@@ -151,6 +151,29 @@ class ObservationService:
                              details={"seed": seed, "selected": chosen})
         return [it for it in items if it.sampled]
 
+    PLAN_FIELDS = ("tolerance_units", "tolerance_pct", "sample_size", "sample_value_threshold", "count_instructions")
+
+    def update_plan(self, user: str, session_id: str, changes: dict[str, Any], reason: str = "") -> Session:
+        """Lead-only change to tolerance and sampling settings, e.g. applying a planning suggestion."""
+        session = self.get_session(session_id)
+        if user != session.lead:
+            raise Forbidden("Only the engagement lead changes the plan")
+        self._require_open(session)
+        unknown = set(changes) - set(self.PLAN_FIELDS)
+        if unknown:
+            raise ServiceError(f"Not plan fields: {sorted(unknown)}")
+        before = {k: getattr(session, k) for k in changes}
+        try:
+            updated = Session.model_validate({**session.model_dump(), **changes})
+        except ValidationError as exc:
+            raise ServiceError(str(exc)) from exc
+        if updated.tolerance_units < 0 or updated.tolerance_pct < 0 or updated.sample_size < 0:
+            raise ServiceError("Tolerance and sample size cannot be negative")
+        self.db.save_session(updated)
+        self.db.append_audit(user, "plan.update", session_id=session_id,
+                             details={"before": before, "after": changes, "reason": reason})
+        return updated
+
     # ================================================================== pairing
     def create_pairing_token(self, user: str, session_id: str) -> tuple[str, datetime]:
         session = self.get_session(session_id)

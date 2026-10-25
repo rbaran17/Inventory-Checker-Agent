@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 from agent_framework import Agent, tool
 from pydantic import Field
 
+from ..knowledge import GROUNDING_RULES, AuditKnowledgeSource, GuidanceSnippet, build_guidance_tool
 from ..models import FieldSource, RecordType
 from ..service import ObservationService, ServiceError
 
@@ -30,7 +31,11 @@ and test-counts. You help the auditor keep complete, well-evidenced records.
   yet counted. Keep answers short: the auditor is on a warehouse floor."""
 
 
-def build_observer_copilot(client: Any, service: ObservationService, session_id: str, user: str) -> Agent:
+def build_observer_copilot(
+    client: Any, service: ObservationService, session_id: str, user: str, *,
+    knowledge: AuditKnowledgeSource | None = None, citations: list[GuidanceSnippet] | None = None,
+) -> Agent:
+    """Build the copilot. With ``knowledge``, it can search audit methodology; hits go to ``citations``."""
     def _dump(obj: Any) -> str:
         return json.dumps(obj, default=str)
 
@@ -137,12 +142,20 @@ def build_observer_copilot(client: Any, service: ObservationService, session_id:
         return _create(RecordType.TAG_CONTROL, {"range_start": range_start, "range_end": range_end,
                                                 "used": used or [], "unused": unused, "voided": voided or []})
 
+    tools = [get_session_summary, lookup_listing_item, list_sample, get_coverage, list_open_items, list_records,
+             record_test_count, record_procedure_observation, record_condition_note, record_cutoff_document,
+             record_tag_control]
+    instructions = INSTRUCTIONS
+    if knowledge is not None:
+        tools.append(build_guidance_tool(knowledge, log=citations))
+        instructions += "\n\n" + GROUNDING_RULES
+    else:
+        instructions += ("\n\nNo audit methodology source is connected. Do not answer methodology questions from "
+                         "memory; refer the auditor to the engagement lead or firm methodology.")
     return Agent(
         client,
-        INSTRUCTIONS,
+        instructions,
         name="observer_copilot",
         description="Helps the observer record and check physical inventory observation evidence.",
-        tools=[get_session_summary, lookup_listing_item, list_sample, get_coverage, list_open_items, list_records,
-               record_test_count, record_procedure_observation, record_condition_note, record_cutoff_document,
-               record_tag_control],
+        tools=tools,
     )

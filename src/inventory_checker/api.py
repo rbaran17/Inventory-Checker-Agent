@@ -21,9 +21,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from pydantic import BaseModel
 
 from . import export
-from .agents import EvidenceExtract, build_chat_client, build_observer_copilot, draft_memo, model_name, read_evidence
+from .agents import (
+    EvidenceExtract,
+    build_chat_client,
+    build_observer_copilot,
+    draft_memo,
+    model_name,
+    read_evidence,
+    suggest_plan,
+)
 from .agents.closeout import CloseoutRequest, run_closeout
 from .config import Settings
+from .knowledge import AuditKnowledgeSource, check_citations, cited_ids, knowledge_from_env
 from .models import Device, FieldSource, RecordType, ReviewAction
 from .service import ObservationService, ServiceError
 from .store import Database, LocalWormEvidenceStore
@@ -51,6 +60,11 @@ class ZoneIn(BaseModel):
 
 class ListingIn(BaseModel):
     csv: str
+
+
+class PlanIn(BaseModel):
+    changes: dict[str, Any]
+    reason: str = ""
 
 
 class SampleIn(BaseModel):
@@ -109,7 +123,8 @@ class CopilotIn(BaseModel):
 
 # ----------------------------------------------------------------------------- app factory
 def create_app(settings: Settings | None = None, *, service: ObservationService | None = None,
-               chat_client: Any | None = None, use_env_client: bool = True) -> FastAPI:
+               chat_client: Any | None = None, use_env_client: bool = True,
+               knowledge: AuditKnowledgeSource | None = None, use_env_knowledge: bool = True) -> FastAPI:
     settings = settings or Settings()
     if service is None:
         settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -120,7 +135,10 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
 
     app = FastAPI(title="Inventory Checker Agent", version="0.1.0")
     app.state.service = service
+    if knowledge is None and use_env_knowledge:
+        knowledge = knowledge_from_env()
     app.state.chat_client = chat_client
+    app.state.knowledge = knowledge
     app.state.active_record: dict[tuple[str, str], str] = {}  # (session, user) -> record open on the laptop
     app.state.copilots: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -163,7 +181,9 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
 
     @app.get("/api/me")
     def me(user: str = Depends(current_user)):
-        return {"user": user, "ai_assist": app.state.chat_client is not None, "model": model_name()}
+        k = app.state.knowledge
+        return {"user": user, "ai_assist": app.state.chat_client is not None, "model": model_name(),
+                "knowledge": {"source": k.name, "authoritative": getattr(k, "authoritative", True)} if k else None}
 
     # ------------------------------------------------------------------ planning
     @app.post("/api/sessions")
@@ -383,7 +403,7 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
     async def close(session_id: str, body: CloseIn, user: str = Depends(current_user)):
         _session_for(session_id, user)
         result = await run_closeout(service, CloseoutRequest(session_id, user, body.explanations),
-                                    app.state.chat_client)
+                                    app.state.chat_client, app.state.knowledge)
         return JSONResponse({"status": result.status, "message": result.message, "open_items": result.open_items},
                             status_code=200 if result.status == "ready" else 409)
 
@@ -410,13 +430,13 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
     @app.get("/api/sessions/{session_id}/export/memo.md")
     async def export_memo(session_id: str, user: str = Depends(current_user)):
         _session_for(session_id, user)
-        return PlainTextResponse(await draft_memo(service, session_id, app.state.chat_client),
+        return PlainTextResponse(await draft_memo(service, session_id, app.state.chat_client, app.state.knowledge),
                                  media_type="text/markdown")
 
     @app.get("/api/sessions/{session_id}/export/package.zip")
     async def export_package(session_id: str, user: str = Depends(current_user)):
         _session_for(session_id, user)
-        memo = await draft_memo(service, session_id, app.state.chat_client)
+        memo = await draft_memo(service, session_id, app.state.chat_client, app.state.knowledge)
         return Response(export.evidence_package(service, session_id, memo), media_type="application/zip",
                         headers={"Content-Disposition": f'attachment; filename="evidence_{session_id}.zip"'})
 
@@ -424,6 +444,25 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
     def audit(session_id: str, user: str = Depends(current_user)):
         _session_for(session_id, user)
         return {"chain_valid": service.db.verify_audit_chain(), "events": service.db.list_audit(session_id)}
+
+    # ------------------------------------------------------------------ audit knowledge / planning
+    @app.get("/api/guidance")
+    def guidance(q: str, topic: str | None = None, top_k: int = 5, user: str = Depends(current_user)):
+        k = app.state.knowledge
+        if k is None:
+            raise HTTPException(503, "No audit knowledge source is connected (set AUDIT_KNOWLEDGE_SOURCE)")
+        return {"source": k.name, "results": [h.to_dict() for h in k.search(q, topic=topic, top_k=min(top_k, 10))]}
+
+    @app.post("/api/sessions/{session_id}/plan-suggestions")
+    async def plan_suggestions(session_id: str, user: str = Depends(current_user)):
+        if _session_for(session_id, user).lead != user:
+            raise HTTPException(403, "Only the lead plans the session")
+        return await suggest_plan(service, session_id, app.state.knowledge, app.state.chat_client)
+
+    @app.post("/api/sessions/{session_id}/plan")
+    def update_plan(session_id: str, body: PlanIn, user: str = Depends(current_user)):
+        _session_for(session_id, user)
+        return service.update_plan(user, session_id, body.changes, body.reason)
 
     # ------------------------------------------------------------------ copilot (MAF agent)
     @app.post("/api/sessions/{session_id}/copilot")
@@ -435,8 +474,10 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
         key = (session_id, user)
         state = app.state.copilots.get(key)
         if state is None:
-            agent = build_observer_copilot(client, service, session_id, user)
-            state = {"agent": agent, "session": agent.create_session(), "pending": {}}
+            citations: list[Any] = []
+            agent = build_observer_copilot(client, service, session_id, user, knowledge=app.state.knowledge,
+                                           citations=citations)
+            state = {"agent": agent, "session": agent.create_session(), "pending": {}, "citations": citations}
             app.state.copilots[key] = state
         contents: list[Any] = []
         for a in body.approvals:
@@ -448,6 +489,7 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
             contents.append(body.message)
         if not contents:
             raise HTTPException(400, "Send a message or approvals")
+        seen = len(state["citations"])
         resp = await state["agent"].run(Message(role="user", contents=contents), session=state["session"])
         pending = []
         for req in resp.user_input_requests:
@@ -455,7 +497,12 @@ def create_app(settings: Settings | None = None, *, service: ObservationService 
             fc = req.function_call
             args = fc.arguments if isinstance(fc.arguments, dict) else json.loads(fc.arguments or "{}")
             pending.append({"request_id": req.id, "tool": fc.name, "arguments": args})
-        return {"reply": resp.text, "pending_approvals": pending}
+        retrieved = {g.id: g for g in state["citations"]}  # everything retrieved in this conversation
+        reply = check_citations(resp.text, set(retrieved))
+        cited = [retrieved[c] for c in cited_ids(reply) if c in retrieved]
+        return {"reply": reply, "pending_approvals": pending,
+                "guidance_used": [g.to_dict() for g in cited],
+                "guidance_retrieved": [g.to_dict() for g in state["citations"][seen:]]}
 
     return app
 

@@ -252,11 +252,45 @@
   async function renderPlan() {
     const listing = await api(`/api/sessions/${sid}/listing`);
     $("formArea").innerHTML = `<label>Import perpetual listing (CSV: sku, description, location, uom, quantity, unit_cost)<input type="file" id="listingFile" accept=".csv,text/csv"></label>
-      <div class="row"><button id="sampleBtn">Draw sheet-to-floor sample</button><span class="muted">${listing.length} item(s) in listing, ${listing.filter(i => i.sampled).length} sampled</span></div>
+      <div class="row"><button id="sampleBtn">Draw sheet-to-floor sample</button><span class="muted">${listing.length} item(s) in listing, ${listing.filter(i => i.sampled).length} sampled · sample size ${session.session.sample_size}, threshold ${session.session.sample_value_threshold ?? "none"}, tolerance ${session.session.tolerance_units} u / ${session.session.tolerance_pct}%</span></div>
+      ${me.knowledge ? `<div class="card" style="margin-top:10px;background:#fafbfe"><h2>Methodology</h2>
+        <p class="muted" style="margin-top:-6px">Source: <b>${esc(me.knowledge.source)}</b>${me.knowledge.authoritative ? "" : ' <span class="pill warn">placeholder content – verify against firm methodology</span>'}</p>
+        <div class="row">${me.user === session.session.lead ? '<button id="planSugBtn">Suggest plan from methodology</button>' : ""}<input id="gq" placeholder="Search guidance, e.g. count at date other than year end" style="max-width:420px"><button class="ghost" id="gqBtn">Search</button></div>
+        <div id="planSug"></div></div>` : ""}
       <table style="margin-top:10px"><thead><tr><th>SKU</th><th>Description</th><th>Location</th><th>UOM</th><th>Qty</th><th>Unit cost</th><th>Sample</th></tr></thead><tbody>
       ${listing.map(i => `<tr><td>${esc(i.sku)}</td><td>${esc(i.description)}</td><td>${esc(i.location)}</td><td>${esc(i.uom)}</td><td>${i.quantity}</td><td>${i.unit_cost}</td><td>${i.sampled ? `<span class="pill ok">${i.sample_reason}</span>` : ""}</td></tr>`).join("")}</tbody></table>`;
     $("listingFile").onchange = async (e) => { const txt = await e.target.files[0].text(); try { const r = await api(`/api/sessions/${sid}/listing`, { json: { csv: txt } }); toast(`Imported ${r.imported} rows`); renderPlan(); } catch (err) { toast(err.message); } };
     $("sampleBtn").onclick = async () => { try { const r = await api(`/api/sessions/${sid}/sample`, { json: {} }); toast(`${r.length} item(s) selected`); renderPlan(); } catch (e) { toast(e.message); } };
+    if (!me.knowledge) return;
+    $("gqBtn").onclick = async () => { const q = $("gq").value.trim(); if (!q) return; try { const r = await api(`/api/guidance?q=${encodeURIComponent(q)}`); $("planSug").innerHTML = r.results.length ? guidanceHtml(r.results) : "<p class='muted'>No guidance found.</p>"; } catch (e) { toast(e.message); } };
+    $("gq").onkeydown = (e) => { if (e.key === "Enter") $("gqBtn").click(); };
+    if ($("planSugBtn")) $("planSugBtn").onclick = async () => {
+      $("planSugBtn").disabled = true; $("planSug").innerHTML = "<p class='muted'>Searching methodology…</p>";
+      try {
+        const r = await api(`/api/sessions/${sid}/plan-suggestions`, { method: "POST" }), p = r.plan;
+        const cites = (ids) => ids.map(c => `<span class="pill">G:${esc(c)}</span>`).join(" ");
+        const items = (list) => list.map(i => `<li>${esc(i.item)}${i.rationale ? ` <span class="muted">– ${esc(i.rationale)}</span>` : ""} ${cites(i.citations)}</li>`).join("");
+        $("planSug").innerHTML = `<p class="muted">${r.generated_by === "ai_draft" ? "AI draft" : "Checklist"} – suggestions only; nothing changes until you apply.${r.dropped_citations.length ? ` ${r.dropped_citations.length} unverified citation(s) removed.` : ""}</p>
+          <b>Procedures to observe</b><ul>${items(p.procedures_to_observe)}</ul>
+          <b>Sampling</b><p>${esc(p.sampling.approach)}. Random sample: ${p.sampling.random_sample_size ?? "–"}, value threshold: ${p.sampling.value_threshold ?? "–"}<br><span class="muted">${esc(p.sampling.rationale)}</span> ${cites(p.sampling.citations)}</p>
+          <b>Tolerance</b><p>${p.tolerance.units ?? "–"} units / ${p.tolerance.pct ?? "–"}%<br><span class="muted">${esc(p.tolerance.rationale)}</span> ${cites(p.tolerance.citations)}</p>
+          ${p.planning_checks.length ? `<b>Other planning checks</b><ul>${items(p.planning_checks)}</ul>` : ""}
+          ${p.open_questions.length ? `<b>Open questions</b><ul>${p.open_questions.map(q => `<li>${esc(q)}</li>`).join("")}</ul>` : ""}
+          <div class="row"><button class="small" id="applyPlan">Apply sampling &amp; tolerance numbers</button></div>
+          <b>Guidance used</b>${guidanceHtml(r.guidance)}`;
+        $("applyPlan").onclick = async () => {
+          const changes = {}; if (p.sampling.random_sample_size != null) changes.sample_size = p.sampling.random_sample_size; if (p.sampling.value_threshold != null) changes.sample_value_threshold = p.sampling.value_threshold;
+          if (p.tolerance.units != null) changes.tolerance_units = p.tolerance.units; if (p.tolerance.pct != null) changes.tolerance_pct = p.tolerance.pct;
+          if (!Object.keys(changes).length) return toast("No numbers to apply");
+          if (!confirm("Apply " + JSON.stringify(changes) + " to this session's plan?")) return;
+          try { await api(`/api/sessions/${sid}/plan`, { json: { changes, reason: "Applied methodology plan suggestion" } }); toast("Plan updated"); await refresh(); renderPlan(); } catch (e) { toast(e.message); }
+        };
+      } catch (e) { toast(e.message); $("planSug").innerHTML = ""; } finally { if ($("planSugBtn")) $("planSugBtn").disabled = false; }
+    };
+  }
+
+  function guidanceHtml(list) {
+    return list.map(g => `<details style="margin:4px 0"><summary><span class="pill">G:${esc(g.id)}</span> ${esc(g.title)} <span class="muted">${esc((g.refs || []).join("; "))}</span>${g.authoritative ? "" : ' <span class="pill warn">placeholder</span>'}</summary><div style="white-space:pre-wrap;padding:6px 0 6px 12px">${esc(g.text)}</div><div class="muted" style="padding-left:12px">${esc(g.source)}</div></details>`).join("");
   }
 
   async function renderClose() {
@@ -292,6 +326,7 @@
     try {
       const r = await api(`/api/sessions/${sid}/copilot`, { json: body });
       if (r.reply) chatAdd(esc(r.reply).replace(/\n/g, "<br>"));
+      if (r.guidance_used && r.guidance_used.length) chatAdd(`<div class="muted" style="font-size:12px">Sources:</div>${guidanceHtml(r.guidance_used)}`);
       for (const p of r.pending_approvals) {
         const d = document.createElement("div"); d.className = "approval";
         d.innerHTML = `<b>Draft: ${esc(p.tool)}</b><br><code>${esc(JSON.stringify(p.arguments))}</code><div class="row"><button class="small">Approve &amp; save</button><button class="ghost small">Reject</button></div>`;
@@ -344,7 +379,7 @@
   $("signinBtn").onclick = () => { document.cookie = "ic_user=" + encodeURIComponent($("email").value.trim()) + "; path=/; SameSite=Strict"; boot(); };
   async function boot() {
     try { me = await api("/api/me"); } catch (e) { $("signin").classList.remove("hidden"); return; }
-    $("signin").classList.add("hidden"); $("whoami").textContent = me.user + (me.ai_assist ? " · AI assist on" : " · AI assist off");
+    $("signin").classList.add("hidden"); $("whoami").textContent = me.user + (me.ai_assist ? " · AI assist on" : " · AI assist off") + (me.knowledge ? " · methodology: " + me.knowledge.source : "");
     if (!me.ai_assist) $("copilotCard").classList.add("hidden");
     await loadSessions();
     setInterval(refresh, 3000);

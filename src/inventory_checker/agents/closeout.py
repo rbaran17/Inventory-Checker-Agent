@@ -64,15 +64,15 @@ class OpenItemsGate(Executor):
 
 
 class MemoDrafter(Executor):
-    def __init__(self, service: ObservationService, client: Any | None):
+    def __init__(self, service: ObservationService, client: Any | None, knowledge: Any | None = None):
         super().__init__(id="memo_drafter")
-        self.service, self.client = service, client
+        self.service, self.client, self.knowledge = service, client, knowledge
 
     @handler
     async def run(self, msg: _Locked, ctx: WorkflowContext[_Memo]) -> None:
         from .memo import draft_memo
 
-        await ctx.send_message(_Memo(msg.session_id, await draft_memo(self.service, msg.session_id, self.client)))
+        await ctx.send_message(_Memo(msg.session_id, await draft_memo(self.service, msg.session_id, self.client, self.knowledge)))
 
 
 class ExportPackager(Executor):
@@ -91,14 +91,15 @@ class ExportPackager(Executor):
         ))
 
 
-def build_closeout_workflow(service: ObservationService, client: Any | None = None):
-    gate, memo, packager = OpenItemsGate(service), MemoDrafter(service, client), ExportPackager(service)
+def build_closeout_workflow(service: ObservationService, client: Any | None = None, knowledge: Any | None = None):
+    gate, memo, packager = OpenItemsGate(service), MemoDrafter(service, client, knowledge), ExportPackager(service)
     return (WorkflowBuilder(name="closeout", start_executor=gate, output_from=[gate, packager])
             .add_edge(gate, memo).add_edge(memo, packager).build())
 
 
-async def run_closeout(service: ObservationService, request: CloseoutRequest, client: Any | None = None) -> CloseoutResult:
-    result = await build_closeout_workflow(service, client).run(request)
+async def run_closeout(service: ObservationService, request: CloseoutRequest, client: Any | None = None,
+                       knowledge: Any | None = None) -> CloseoutResult:
+    result = await build_closeout_workflow(service, client, knowledge).run(request)
     outputs = result.get_outputs()
     if not outputs:
         raise RuntimeError("Close-out workflow produced no output")

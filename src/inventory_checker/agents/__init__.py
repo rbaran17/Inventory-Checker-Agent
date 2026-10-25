@@ -5,9 +5,11 @@ from .closeout import build_closeout_workflow, run_closeout
 from .copilot import build_observer_copilot
 from .evidence_reader import EvidenceExtract, read_evidence
 from .memo import draft_memo
+from .planning import PlanSuggestion, suggest_plan
 
 __all__ = [
     "EvidenceExtract",
+    "PlanSuggestion",
     "build_chat_client",
     "build_closeout_workflow",
     "build_observer_copilot",
@@ -15,4 +17,5 @@ __all__ = [
     "model_name",
     "read_evidence",
     "run_closeout",
+    "suggest_plan",
 ]

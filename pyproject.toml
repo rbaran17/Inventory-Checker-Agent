@@ -29,7 +29,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-inventory_checker = ["static/*"]
+inventory_checker = ["static/*", "knowledge/standin/*.md", "knowledge/standin/references/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

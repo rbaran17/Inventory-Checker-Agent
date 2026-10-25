@@ -42,6 +42,8 @@ Source PRD: *Physical Inventory Observation – Phone Camera Capture: Tech Spec*
 | `agents/copilot.py` | MAF `Agent` with tools over the session. Read tools run freely; every write tool uses `approval_mode="always_require"`, so nothing is saved until the observer approves |
 | `agents/memo.py` | Deterministic memo body traced to record ids, plus an optional AI-drafted summary, labelled as such |
 | `agents/closeout.py` | MAF `Workflow`: `OpenItemsGate → MemoDrafter → ExportPackager` |
+| `agents/planning.py` | Planning assistant: procedures, sampling and tolerance suggestions grounded in methodology; the lead applies them |
+| `knowledge/` | Audit knowledge interface, the `search_audit_guidance` MAF tool, citation checks, and a placeholder `standin/` skill folder |
 | `export.py` | Excel workbook (Summary, Test Counts with amber rows over tolerance, Procedures, Condition Notes, Cutoff, Tag Control, Evidence Manifest, Close Explanations), CSV schedule, evidence ZIP |
 | `api.py` | FastAPI app: JSON API, `/` observation app, `/pair` phone capture page |
 | `static/` | `capture.html` (phone) and `app.html` (laptop), plain HTML/JS with no build step |
@@ -74,10 +76,35 @@ AI assist is optional. With nothing configured, the app works and the AI buttons
 | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION` | Optional key-based auth / API version |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Local development only |
 
+### Audit knowledge (methodology grounding)
+
+The agents never state methodology from memory. They call the `search_audit_guidance` tool and cite each
+snippet they rely on as `[G:<id>]`. Citations to snippets that were never retrieved are removed and reported.
+
+| Where | How it is grounded |
+|---|---|
+| Observer copilot | Searches guidance when the auditor asks a methodology question; the reply lists the sources it cited |
+| Memo drafting | Looks up guidance for each memo section that has records and adds a **Methodology references** section; the AI summary may cite only those snippets |
+| Session planning | **Suggest plan from methodology** (lead only, in *Listing & sample*) proposes procedures, sampling and tolerance with citations. Nothing changes until the lead applies it, and the change is audited |
+| Any user | Guidance search box in *Listing & sample*, or `GET /api/guidance?q=` |
+
+Connect the firm's audit knowledge skill with `AUDIT_KNOWLEDGE_SOURCE`:
+
+| Value | Source |
+|---|---|
+| unset / `standin` | Bundled placeholder (`knowledge/standin/`). Paraphrased summaries, flagged in the UI and memo as *placeholder, verify against firm methodology* |
+| `dir:/path/to/skill` | A skill folder: `SKILL.md` plus `references/**/*.md`, split by heading. Optional `> refs:` and `> topics:` lines under a heading become citation metadata |
+| `http:https://host/search` | A search service. `POST {"query","top_k","topic","domain":"inventory"}` returns `{"results":[{"id","title","text","source","refs","topics","url","score"}]}`. `AUDIT_KNOWLEDGE_TOKEN` is sent as a bearer token |
+| `none` | Grounding off. The copilot is told to send methodology questions to the engagement lead |
+
+Any other backend (for example an MCP server or Azure AI Search) only needs a class with
+`name` and `search(query, *, topic=None, top_k=5) -> list[GuidanceSnippet]`, passed to `create_app(knowledge=...)`.
+
 ## Workflow coverage (PRD → implementation)
 
 | PRD step | Where |
 |---|---|
+| Plan, with methodology suggestions | `POST /api/sessions/{id}/plan-suggestions`, `POST /api/sessions/{id}/plan` |
 | Plan: session, zones, listing, high-value sample | `POST /api/sessions`, `/zones`, `/listing`, `/sample` (random + all items over the value threshold) |
 | Pair: one-time QR, 5 min, single use, one camera per observer | `create_pairing_token` / `redeem_pairing`; phone shows session, location and observer; laptop shows phone and battery; one-tap unpair on either side |
 | Capture: photo, 3-frame burst keeping the sharpest, 5–30 s clip | `capture.html` (Laplacian-variance sharpness, MediaRecorder, steadiness indicator, Wake Lock, BarcodeDetector for bin codes) |
@@ -103,4 +130,6 @@ AI assist is optional. With nothing configured, the app works and the AI buttons
   copies should be derived files linked to the originals, so the original hashes stay valid.
 - **Workpaper-system import format** is not yet known (PRD open question). Excel and CSV are produced today.
 - The "active record" (where phone captures attach) is held in memory per observer and resets on restart.
+- The bundled methodology is a placeholder and the keyword search is basic. Point `AUDIT_KNOWLEDGE_SOURCE`
+  at the firm's audit knowledge skill before relying on any citation.
 - Default tolerance and who can change it are still open questions. Tolerance is set per session by the lead.
