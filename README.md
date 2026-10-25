@@ -88,11 +88,20 @@ snippet they rely on as `[G:<id>]`. Citations to snippets that were never retrie
 | Session planning | **Suggest plan from methodology** (lead only, in *Listing & sample*) proposes procedures, sampling and tolerance with citations. Nothing changes until the lead applies it, and the change is audited |
 | Any user | Guidance search box in *Listing & sample*, or `GET /api/guidance?q=` |
 
-Connect the firm's audit knowledge skill with `AUDIT_KNOWLEDGE_SOURCE`:
+**Adding the firm's audit knowledge skill.** The repo has an empty slot for it at
+[`skills/audit-knowledge/`](skills/audit-knowledge/SKILL.md). Its `SKILL.md` is marked `placeholder: true`.
+Until the real skill replaces it, the agents use the bundled stand-in. To add the skill:
+
+1. Replace `skills/audit-knowledge/SKILL.md` with the skill's own, without the `placeholder: true` line.
+2. Put the methodology Markdown in `skills/audit-knowledge/references/`. The format is in `references/_FORMAT.md`.
+3. Restart the service. No configuration change is needed.
+
+To use a different source, set `AUDIT_KNOWLEDGE_SOURCE`:
 
 | Value | Source |
 |---|---|
-| unset / `standin` | Bundled placeholder (`knowledge/standin/`). Paraphrased summaries, flagged in the UI and memo as *placeholder, verify against firm methodology* |
+| unset / `auto` | `skills/audit-knowledge/` (or `AUDIT_KNOWLEDGE_DIR`) once the skill is added; until then the stand-in |
+| `standin` | Bundled placeholder (`knowledge/standin/`). Paraphrased summaries, flagged in the UI and memo as *placeholder, verify against firm methodology* |
 | `dir:/path/to/skill` | A skill folder: `SKILL.md` plus `references/**/*.md`, split by heading. Optional `> refs:` and `> topics:` lines under a heading become citation metadata |
 | `http:https://host/search` | A search service. `POST {"query","top_k","topic","domain":"inventory"}` returns `{"results":[{"id","title","text","source","refs","topics","url","score"}]}`. `AUDIT_KNOWLEDGE_TOKEN` is sent as a bearer token |
 | `none` | Grounding off. The copilot is told to send methodology questions to the engagement lead |
@@ -130,6 +139,6 @@ Any other backend (for example an MCP server or Azure AI Search) only needs a cl
   copies should be derived files linked to the originals, so the original hashes stay valid.
 - **Workpaper-system import format** is not yet known (PRD open question). Excel and CSV are produced today.
 - The "active record" (where phone captures attach) is held in memory per observer and resets on restart.
-- The bundled methodology is a placeholder and the keyword search is basic. Point `AUDIT_KNOWLEDGE_SOURCE`
-  at the firm's audit knowledge skill before relying on any citation.
+- The audit knowledge skill is not added yet (`skills/audit-knowledge/` is a placeholder slot). Until it
+  is, citations come from the stand-in and the keyword search is basic. Do not rely on them.
 - Default tolerance and who can change it are still open questions. Tolerance is set per session by the lead.

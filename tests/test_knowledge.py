@@ -228,3 +228,27 @@ def test_api_guidance_plan_and_copilot_sources(tmp_path):
 
     off = TestClient(create_app(Settings(data_dir=tmp_path / "2"), use_env_client=False, use_env_knowledge=False))
     assert off.get("/api/guidance", params={"q": "x"}, headers=L).status_code == 503
+
+
+def test_auto_uses_standin_until_the_skill_is_added(monkeypatch, tmp_path):
+    from inventory_checker.knowledge import is_placeholder
+    from inventory_checker.knowledge.sources import PROJECT_SKILL_DIR
+
+    monkeypatch.delenv("AUDIT_KNOWLEDGE_SOURCE", raising=False)
+    assert is_placeholder(PROJECT_SKILL_DIR)  # the repo ships the empty slot
+    monkeypatch.setenv("AUDIT_KNOWLEDGE_DIR", str(PROJECT_SKILL_DIR))
+    assert knowledge_from_env().name == "standin"
+
+    skill = tmp_path / "audit-knowledge"
+    (skill / "references").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: audit-knowledge\nplaceholder: true\n---\n# Slot\nTo fill.\n")
+    (skill / "references" / "_FORMAT.md").write_text("# Format\nnot content\n")
+    (skill / "references" / "inv.md").write_text("# Test counts\n> topics: test_counts\n\nFirm rule FIRM-1.\n")
+    monkeypatch.setenv("AUDIT_KNOWLEDGE_DIR", str(skill))
+    assert knowledge_from_env().name == "standin"  # still marked placeholder
+
+    (skill / "SKILL.md").write_text("---\nname: audit-knowledge\n---\n# Firm audit knowledge\nMethodology.\n")
+    k = knowledge_from_env()
+    assert k.name == "audit-knowledge" and k.authoritative
+    assert "inv#test-counts" in {s.id for s in k.snippets}
+    assert not any(s.source.endswith("_FORMAT.md") for s in k.snippets)

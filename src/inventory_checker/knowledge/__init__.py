@@ -10,7 +10,9 @@ snippets it returns. The content comes from a pluggable ``AuditKnowledgeSource``
 
 Pick one with ``AUDIT_KNOWLEDGE_SOURCE``:
 
-- unset or ``standin``: the bundled stand-in
+- unset or ``auto``: the firm's skill in ``skills/audit-knowledge/`` (or ``AUDIT_KNOWLEDGE_DIR``) once it
+  has been added; until then (its SKILL.md says ``placeholder: true``) the bundled stand-in
+- ``standin``: the bundled stand-in
 - ``dir:/path/to/skill``: a skill folder
 - ``http:https://host/search``: a search service (``AUDIT_KNOWLEDGE_TOKEN`` adds a bearer token)
 - ``none``: grounding off
@@ -21,6 +23,8 @@ from .sources import (
     GuidanceSnippet,
     HttpKnowledgeSource,
     SkillFolderSource,
+    audit_skill_dir,
+    is_placeholder,
     knowledge_from_env,
     standin_source,
 )
@@ -32,10 +36,12 @@ __all__ = [
     "GuidanceSnippet",
     "HttpKnowledgeSource",
     "SkillFolderSource",
+    "audit_skill_dir",
     "build_guidance_tool",
     "check_citations",
     "cited_ids",
     "format_citations",
+    "is_placeholder",
     "knowledge_from_env",
     "standin_source",
 ]

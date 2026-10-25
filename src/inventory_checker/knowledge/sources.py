@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -12,6 +13,8 @@ from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,7 +88,7 @@ class SkillFolderSource:
 
     def _load(self) -> list[GuidanceSnippet]:
         snippets: list[GuidanceSnippet] = []
-        for path in sorted(p for p in self.root.rglob("*.md") if p.is_file()):
+        for path in sorted(p for p in self.root.rglob("*.md") if p.is_file() and not p.name.startswith("_")):
             rel = path.relative_to(self.root).as_posix()
             text = path.read_text(encoding="utf-8")
             if text.startswith("---"):  # skip YAML front matter
@@ -181,9 +184,37 @@ class HttpKnowledgeSource:
 # ----------------------------------------------------------------------------- configuration
 
 
+PROJECT_SKILL_DIR = Path(__file__).resolve().parents[3] / "skills" / "audit-knowledge"
+
+
+def is_placeholder(folder: Path) -> bool:
+    """True if ``folder`` is missing, empty, or its SKILL.md front matter says ``placeholder: true``."""
+    skill = folder / "SKILL.md"
+    if not folder.is_dir() or not skill.is_file():
+        return True
+    text = skill.read_text(encoding="utf-8")
+    front_matter = text.split("\n---", 1)[0] if text.startswith("---") else ""
+    return bool(re.search(r"^placeholder:\s*true\s*$", front_matter, re.MULTILINE | re.IGNORECASE))
+
+
+def audit_skill_dir() -> Path:
+    """Where the firm's audit knowledge skill goes: ``AUDIT_KNOWLEDGE_DIR`` or ``skills/audit-knowledge``."""
+    env = os.getenv("AUDIT_KNOWLEDGE_DIR")
+    if env:
+        return Path(env)
+    local = Path.cwd() / "skills" / "audit-knowledge"
+    return local if local.is_dir() else PROJECT_SKILL_DIR
+
+
 def knowledge_from_env() -> AuditKnowledgeSource | None:
-    spec = os.getenv("AUDIT_KNOWLEDGE_SOURCE", "standin").strip()
-    if spec in ("", "standin"):
+    spec = os.getenv("AUDIT_KNOWLEDGE_SOURCE", "auto").strip()
+    if spec in ("", "auto"):
+        folder = audit_skill_dir()
+        if is_placeholder(folder):
+            log.info("Audit knowledge skill not added yet (%s); using the bundled stand-in", folder)
+            return standin_source()
+        return SkillFolderSource(folder, name="audit-knowledge")
+    if spec == "standin":
         return standin_source()
     if spec == "none":
         return None
