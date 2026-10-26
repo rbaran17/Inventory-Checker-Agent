@@ -56,5 +56,5 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/healthz && break; sleep 1; done
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/state)" = 401
           curl -fsS -c jar "http://127.0.0.1:8000/?key=ci" -o /dev/null
-          curl -fsS -b jar http://127.0.0.1:8000/api/state | python3 -c "import json,sys; s=json.load(sys.stdin); assert len(s['population'])==35"
+          curl -fsS -b jar http://127.0.0.1:8000/api/state | python3 -c "import json,sys; s=json.load(sys.stdin); assert s['workspaces']['demo']['has_sample'] and s['active']=='engagement'"
           docker logs app

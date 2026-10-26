@@ -1,3 +1,3 @@
-"""Inventory Checker Agent: phone camera scan, object detection and sample-listing match on MAF."""
+"""Inventory Checker Agent: phone-camera counting and verification against an items to be tested listing, on MAF."""
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"

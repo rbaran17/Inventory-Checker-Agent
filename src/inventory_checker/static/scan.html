@@ -2,128 +2,327 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Count Camera</title>
 <style>
-  :root { --bg:#0b0f17; --panel:#151b26; --ink:#eef2f8; --muted:#9aa6b8; --accent:#2f7df6; --amber:#f2b33d; --red:#e5484d; --green:#2fb36f; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:10px 14px; background:var(--panel); display:flex; justify-content:space-between; align-items:center; gap:8px; }
-  .muted { color:var(--muted); font-size:13px; }
-  #view { position:relative; background:#000; width:100%; aspect-ratio:3/4; max-height:58vh; overflow:hidden; }
-  video { width:100%; height:100%; object-fit:cover; }
-  .badge { position:absolute; top:10px; padding:4px 10px; border-radius:99px; font-size:13px; background:rgba(0,0,0,.6); }
-  #live { left:10px; } #busy { right:10px; display:none; }
-  #start { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:24px; text-align:center; }
-  .bar { display:flex; gap:8px; padding:10px 14px; }
-  button { flex:1; padding:16px 10px; border:0; border-radius:12px; font-size:16px; font-weight:600; color:#fff; background:var(--accent); }
-  button.secondary { background:#2a3344; } button.stop { background:var(--red); }
-  button:disabled { opacity:.45; }
-  #results { padding:0 14px 30px; }
-  .obj { display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #222b3a; }
-  .pill { font-size:12px; padding:2px 8px; border-radius:99px; background:#2a3344; color:var(--muted); white-space:nowrap; }
-  .pill.ok { background:rgba(47,179,111,.2); color:var(--green); } .pill.warn { background:rgba(242,179,61,.2); color:var(--amber); }
-  .err { color:var(--red); } .ok { color:var(--green); }
-  #keyBanner { display:none; position:sticky; top:0; z-index:9; background:#e5484d; color:#fff; padding:12px 16px; font-weight:600; }
+  :root { --ink:#f5f7fb; --muted:#a3adbf; --glass:rgba(18,22,30,.72); --line:rgba(255,255,255,.12); --accent:#3b7bff;
+          --ok:#34c77b; --warn:#f5b83d; --bad:#ff5a5f; --sheet:#11151d; --card:#1a2030; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { margin:0; height:100%; background:#000; color:var(--ink); font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; overflow:hidden; }
+  button { font:inherit; color:inherit; border:0; background:none; cursor:pointer; }
+  #app { position:fixed; inset:0; }
+  video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
+
+  /* top bar */
+  .top { position:absolute; top:0; left:0; right:0; padding:calc(env(safe-area-inset-top) + 10px) 14px 26px;
+         display:flex; justify-content:space-between; align-items:center; gap:10px;
+         background:linear-gradient(rgba(0,0,0,.65), transparent); z-index:3; }
+  .pill { display:inline-flex; align-items:center; gap:7px; padding:6px 12px; border-radius:99px; background:var(--glass);
+          backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); font-size:13px; font-weight:600; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); box-shadow:0 0 0 3px rgba(52,199,123,.25); } .dot.bad { background:var(--bad); }
+
+  /* framing guide for close-ups */
+  #guide { position:absolute; left:12%; right:12%; top:32%; height:22%; border:2px solid rgba(255,255,255,.85);
+           border-radius:14px; box-shadow:0 0 0 9999px rgba(0,0,0,.28); display:none; z-index:1; pointer-events:none; }
+  #guide span { position:absolute; top:-30px; left:0; right:0; text-align:center; font-size:13px; font-weight:600; text-shadow:0 1px 3px #000; }
+
+  /* bottom controls */
+  .bottom { position:absolute; left:0; right:0; bottom:0; padding:30px 18px calc(env(safe-area-inset-bottom) + 16px);
+            background:linear-gradient(transparent, rgba(0,0,0,.8)); z-index:3; }
+  #hint { text-align:center; font-size:13px; color:#dfe5f1; min-height:18px; margin-bottom:12px; text-shadow:0 1px 3px #000; }
+  .modes { display:flex; justify-content:center; gap:4px; margin:0 auto 16px; padding:4px; border-radius:99px; background:var(--glass); width:max-content;
+           backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
+  .modes button { padding:7px 18px; border-radius:99px; font-size:14px; font-weight:600; color:var(--muted); }
+  .modes button.on { background:#fff; color:#000; }
+  .controls { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; }
+  .side { width:52px; height:52px; border-radius:14px; position:relative; background:var(--glass); display:grid; place-items:center; border:1px solid var(--line); }
+  .badge { position:absolute; top:-6px; right:-6px; min-width:22px; height:22px; padding:0 6px; border-radius:11px; background:var(--accent);
+           font-size:12px; font-weight:700; display:grid; place-items:center; border:2px solid #000; }
+  #resultsBtn { justify-self:start; }
+  #resultsBtn .thumb { width:100%; height:100%; border-radius:13px; overflow:hidden; display:grid; place-items:center; }
+  #resultsBtn .thumb img { width:100%; height:100%; object-fit:cover; }
+  #shutter { width:78px; height:78px; border-radius:50%; border:4px solid #fff; display:grid; place-items:center; position:relative; }
+  #shutter i { width:62px; height:62px; border-radius:50%; background:#fff; transition:all .2s ease; }
+  #shutter.video i { background:var(--bad); }
+  #shutter.recording i { width:30px; height:30px; border-radius:8px; }
+  #shutter.recording { animation:pulse 1.4s ease-in-out infinite; }
+  #shutter:disabled { opacity:.4; }
+  #shutter .spin { position:absolute; inset:-4px; border-radius:50%; border:4px solid transparent; border-top-color:var(--accent); display:none; animation:spin .8s linear infinite; }
+  #shutter.busy .spin { display:block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes pulse { 50% { box-shadow:0 0 0 8px rgba(255,90,95,.25); } }
+  #status2 { justify-self:end; text-align:right; font-size:12px; color:var(--muted); line-height:1.3; }
+  #status2 b { display:block; color:var(--ink); font-size:15px; }
+
+  /* latest-result card */
+  #result { position:absolute; left:10px; right:10px; bottom:calc(env(safe-area-inset-bottom) + 200px); z-index:4; background:var(--glass);
+            backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px); border:1px solid var(--line); border-radius:18px; padding:12px 14px;
+            transform:translateY(20px); opacity:0; pointer-events:none; transition:all .25s ease; max-height:42vh; overflow:auto; }
+  #result.show { transform:none; opacity:1; pointer-events:auto; }
+  .rhead { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+  .rhead b { font-size:15px; } .rhead small { color:var(--muted); }
+  .obj { display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-top:1px solid var(--line); align-items:flex-start; }
+  .obj .name { font-weight:600; } .sub { color:var(--muted); font-size:12.5px; }
+  .attr { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:#cfe0ff; margin-top:2px; word-break:break-all; }
+  .tag { font-size:12px; font-weight:700; padding:3px 9px; border-radius:99px; white-space:nowrap; background:rgba(255,255,255,.1); color:var(--muted); }
+  .tag.ok { background:rgba(52,199,123,.18); color:var(--ok); }
+  .x { width:30px; height:30px; border-radius:50%; display:grid; place-items:center; color:var(--muted); flex:none; }
+  .x:active { background:rgba(255,255,255,.1); }
+  .tbtn { padding:6px 12px; border-radius:99px; font-size:13px; font-weight:600; background:rgba(255,255,255,.1); white-space:nowrap; }
+  .tbtn.danger { color:#ffb3b5; } .tbtn.confirm { background:var(--bad); color:#fff; }
+
+  /* results sheet */
+  #sheet { position:absolute; inset:0; z-index:6; background:rgba(0,0,0,.45); opacity:0; pointer-events:none; transition:opacity .2s; }
+  #sheet.show { opacity:1; pointer-events:auto; }
+  .panel { position:absolute; left:0; right:0; bottom:0; max-height:88%; display:flex; flex-direction:column; background:var(--sheet);
+           border-radius:22px 22px 0 0; transform:translateY(100%); transition:transform .28s ease; padding-bottom:env(safe-area-inset-bottom); }
+  #sheet.show .panel { transform:none; }
+  .grab { width:40px; height:5px; border-radius:3px; background:#3a4256; margin:10px auto 6px; }
+  .shead { display:flex; justify-content:space-between; align-items:center; padding:4px 16px 10px; }
+  .shead h2 { margin:0; font-size:19px; }
+  .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:0 16px 12px; }
+  .summary div { background:var(--card); border-radius:12px; padding:8px 10px; } .summary span { font-size:11px; color:var(--muted); font-weight:600; }
+  .summary b { display:block; font-size:19px; } .summary .ok b { color:var(--ok); } .summary .warn b { color:var(--warn); } .summary .bad b { color:var(--bad); }
+  .list { overflow:auto; padding:0 12px 16px; -webkit-overflow-scrolling:touch; }
+  .scan { background:var(--card); border-radius:16px; padding:10px 12px; margin-bottom:10px; }
+  .scan .meta { display:flex; gap:10px; align-items:center; margin-bottom:2px; }
+  .scan .meta img { width:54px; height:54px; border-radius:10px; object-fit:cover; flex:none; background:#000; }
+  .scan .meta div { flex:1; min-width:0; } .scan .meta b { display:block; }
+  .empty { text-align:center; color:var(--muted); padding:40px 20px; }
+
+  /* start screen + toast */
+  #start { position:absolute; inset:0; z-index:5; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:18px; padding:28px;
+           background:radial-gradient(circle at 50% 30%, #1a2440, #05070b 70%); text-align:center; }
+  #start .icon { width:72px; height:72px; border-radius:22px; background:linear-gradient(135deg,#3b7bff,#7a5cff); display:grid; place-items:center; font-size:34px; }
+  #start h1 { margin:0; font-size:24px; } #start p { margin:0; color:var(--muted); max-width:320px; }
+  .how { display:grid; gap:10px; text-align:left; max-width:330px; width:100%; }
+  .how div { display:flex; gap:12px; align-items:flex-start; background:rgba(255,255,255,.05); border-radius:14px; padding:10px 12px; }
+  .how b { display:block; } .how small { color:var(--muted); }
+  .primary { width:100%; max-width:330px; padding:16px; border-radius:16px; background:#fff; color:#000; font-weight:700; font-size:17px; }
+  #toast { position:absolute; left:14px; right:14px; top:calc(env(safe-area-inset-top) + 64px); z-index:8; padding:11px 14px; border-radius:14px;
+           background:rgba(255,90,95,.95); color:#fff; font-weight:600; font-size:14px; transform:translateY(-12px); opacity:0; transition:all .2s; pointer-events:none; }
+  #toast.show { transform:none; opacity:1; } #toast.info { background:rgba(40,48,66,.95); }
 </style>
 </head>
 <body>
-<div id="keyBanner">Not connected: the laptop's server was restarted or this link is old. Scan the QR code on the laptop again.</div>
-<header>
-  <div><b>Count Camera</b><div class="muted" id="status">Connecting…</div></div>
-  <div class="muted" style="text-align:right">Sample <b id="progress">–</b><br><span id="cost">0 scans</span></div>
-</header>
-<div id="view">
+<div id="app">
   <video id="video" playsinline muted autoplay></video>
-  <div class="badge" id="live">Camera off</div>
-  <div class="badge" id="busy">Analysing…</div>
-  <div id="start"><div>Point the camera at the inventory. <b>Scan video</b> sends a few frames every few seconds while you pan slowly; <b>Photo</b> sends one picture.</div><button id="camBtn" style="flex:0;padding:14px 28px">Start camera</button></div>
+  <div id="guide"><span>Fit the label inside the frame</span></div>
+
+  <div class="top">
+    <div class="pill"><span class="dot" id="dot"></span><span id="ws">Connecting…</span></div>
+    <div class="pill" id="progressPill">–</div>
+  </div>
+
+  <div id="result"></div>
+
+  <div class="bottom">
+    <div id="hint"></div>
+    <div class="modes"><button data-mode="video" class="on">Scan</button><button data-mode="closeup">Close-up</button></div>
+    <div class="controls">
+      <button class="side" id="resultsBtn" aria-label="Results"><span class="thumb" id="thumb">☰</span><span class="badge" id="count" hidden>0</span></button>
+      <button id="shutter" class="video" aria-label="Capture" disabled><i></i><span class="spin"></span></button>
+      <div id="status2"><b id="scannedNum">–</b>scanned</div>
+    </div>
+  </div>
+
+  <div id="sheet"><div class="panel">
+    <div class="grab"></div>
+    <div class="shead"><h2>Results</h2><button class="tbtn" id="closeSheet">Done</button></div>
+    <div class="summary" id="summary"></div>
+    <div class="list" id="list"></div>
+  </div></div>
+
+  <div id="start">
+    <div class="icon">▦</div>
+    <div><h1>Count Camera</h1><p>Identify, count and verify the items to be tested.</p></div>
+    <div class="how">
+      <div><span>🎥</span><span><b>Scan</b><small>Tap the red button and pan slowly across the items.</small></span></div>
+      <div><span>🔍</span><span><b>Close-up</b><small>Hold 10–20 cm from a label to read serial and model numbers.</small></span></div>
+      <div><span>🗂</span><span><b>Results</b><small>Review every scan and remove anything you don't want to keep.</small></span></div>
+    </div>
+    <button class="primary" id="camBtn">Start camera</button>
+    <p id="startErr" style="color:#ffb3b5"></p>
+  </div>
+  <div id="toast"></div>
 </div>
-<div class="bar">
-  <button id="videoBtn" disabled>Scan video</button>
-  <button id="photoBtn" class="secondary" disabled>Photo</button>
-</div>
-<div class="muted" style="padding:0 14px 6px" id="hint"></div>
-<div id="results"></div>
 
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const FRAMES_PER_SEGMENT = 4, FRAME_GAP_MS = 900, MAX_EDGE = 1280, QUALITY = 0.8;
-  let stream = null, scanning = false, busy = false, scans = 0, wakeLock = null;
+  // Video segments: several small frames. Close-ups: one large frame so small label text stays legible.
+  const FRAMES_PER_SEGMENT = 4, FRAME_GAP_MS = 900, VIDEO_EDGE = 1280, VIDEO_QUALITY = 0.8, CLOSEUP_EDGE = 2048, CLOSEUP_QUALITY = 0.9;
+  const HINT = { video: "Tap the red button, then pan slowly across the items", closeup: "Hold 10–20 cm from the label and tap" };
+  let stream = null, mode = "video", scanning = false, busy = false, wakeLock = null, view = { scans: [], summary: null }, cardScan = null, cardTimer = null;
 
   async function api(path, opts = {}) {
     const r = await fetch(path, opts);
     const body = await r.json().catch(() => ({}));
-    $("keyBanner").style.display = r.status === 401 ? "block" : "none";
-    if (!r.ok) throw new Error(r.status === 401 ? "Not connected: scan the QR code on the laptop again" : (body.detail || r.statusText));
+    if (r.status === 401) throw new Error("Not connected. Scan the QR code on the laptop again.");
+    if (!r.ok) throw new Error(body.detail || r.statusText);
     return body;
   }
+  function toast(msg, info) { const t = $("toast"); t.textContent = msg; t.className = "show" + (info ? " info" : ""); clearTimeout(t._h); t._h = setTimeout(() => t.className = "", 4500); }
+  const buzz = (p) => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
 
+  // ------------------------------------------------------------------ connection + progress
   async function ping() {
     try {
       const r = await api("/api/ping", { method: "POST" });
-      $("status").innerHTML = r.ai_ready ? '<span class="ok">● Connected</span>' : '<span class="err">● Connected, but AI is off on the laptop</span>';
-    } catch (e) { $("status").innerHTML = `<span class="err">● ${esc(e.message)}</span>`; }
+      $("ws").textContent = r.workspace === "demo" ? "Demo" : "Engagement";
+      $("dot").className = "dot " + (r.ai_ready && r.sample_name ? "ok" : "bad");
+      if (!r.ai_ready) setHint("AI is not configured on the laptop", true);
+      else if (!r.sample_name) setHint("Upload the items to be tested listing on the laptop", true);
+      else if (!scanning && !busy) setHint(HINT[mode]);
+      if (r.summary) progress(r.summary);
+    } catch (e) { $("dot").className = "dot bad"; $("ws").textContent = "Offline"; setHint(e.message, true); }
+  }
+  function setHint(text, warn) { $("hint").textContent = text; $("hint").style.color = warn ? "#ffd08a" : ""; }
+  function progress(s) {
+    $("progressPill").textContent = `${s.verified} verified · ${s.check + s.exception} to check`;
+    $("scannedNum").textContent = `${s.total - s.not_scanned} / ${s.total}`;
   }
   setInterval(ping, 5000); ping();
 
+  // ------------------------------------------------------------------ camera
   $("camBtn").onclick = async () => {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
-      $("video").srcObject = stream; $("start").style.display = "none"; $("live").textContent = "Camera on";
-      $("videoBtn").disabled = $("photoBtn").disabled = false;
+      $("video").srcObject = stream; $("start").style.display = "none"; $("shutter").disabled = false;
       try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
-    } catch (e) { $("hint").innerHTML = `<span class="err">Camera unavailable: ${esc(e.message)}. The page must be opened over https.</span>`; }
+      loadScans();
+    } catch (e) { $("startErr").textContent = `Camera unavailable: ${e.message}. Open this page from the QR code (it must be https).`; }
   };
-  document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && stream) { try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {} } });
+  document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && stream) { try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {} ping(); } });
 
-  function grab() {
-    const v = $("video"), scale = Math.min(1, MAX_EDGE / Math.max(v.videoWidth, v.videoHeight));
+  function grab(maxEdge, quality) {
+    const v = $("video"), scale = Math.min(1, maxEdge / Math.max(v.videoWidth, v.videoHeight));
     const c = document.createElement("canvas"); c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
     c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-    return new Promise(res => c.toBlob(res, "image/jpeg", QUALITY));
+    return new Promise(res => c.toBlob(res, "image/jpeg", quality));
   }
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  async function send(frames) {
-    const fd = new FormData(); frames.forEach((b, i) => fd.append("frames", new File([b], `f${i}.jpg`, { type: "image/jpeg" })));
-    busy = true; $("busy").style.display = "block";
-    try {
-      const r = await api("/api/scans", { method: "POST", body: fd });
-      scans++; $("cost").textContent = `${scans} scan${scans === 1 ? "" : "s"}`;
-      show(r.scan, r.assessment);
-    } catch (e) {
-      $("hint").innerHTML = `<span class="err">Scan failed: ${esc(e.message)}</span>`;
-      $("results").innerHTML = `<div style="background:rgba(229,72,77,.15);border:1px solid var(--red);border-radius:10px;padding:12px;margin-top:6px"><b class="err">Scan not saved</b><div style="margin-top:4px;word-break:break-word">${esc(e.message)}</div></div>`;
-      if (scanning) await sleep(3000);
-    }
-    finally { busy = false; $("busy").style.display = "none"; }
-  }
-
-  function show(scan, a) {
-    const s = a.summary, total = s.match + s.difference + s.not_counted;
-    $("progress").textContent = `${s.match + s.difference}/${total} counted`;
-    $("hint").textContent = `${scan.id}: ${scan.frames} frame(s), ${scan.seconds}s, image ${scan.image_quality}${scan.notes ? " – " + scan.notes : ""}`;
-    $("results").innerHTML = scan.objects.length ? scan.objects.map(o => {
-      const tag = !o.matched_sku ? '<span class="pill">not in population</span>' : o.sampled ? `<span class="pill ok">sample ${esc(o.matched_sku)}</span>` : `<span class="pill warn">${esc(o.matched_sku)} not sampled</span>`;
-      return `<div class="obj"><div><b>${esc(o.name)}</b> × ${o.count}<div class="muted">${Math.round(o.confidence * 100)}% sure${o.visible_text ? " · “" + esc(o.visible_text) + "”" : ""}</div></div><div>${tag}</div></div>`;
-    }).join("") : '<p class="muted">Nothing identified in this view.</p>';
-  }
-
-  $("photoBtn").onclick = async () => { if (!busy) await send([await grab()]); };
-  $("videoBtn").onclick = async () => {
-    if (scanning) { scanning = false; $("videoBtn").textContent = "Scan video"; $("videoBtn").className = ""; return; }
-    scanning = true; $("videoBtn").textContent = "Stop"; $("videoBtn").className = "stop"; $("hint").textContent = "Pan slowly across the shelf…";
+  // ------------------------------------------------------------------ modes + shutter
+  document.querySelectorAll(".modes button").forEach(b => b.onclick = () => {
+    if (scanning) stopScanning();
+    mode = b.dataset.mode;
+    document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));
+    $("shutter").classList.toggle("video", mode === "video");
+    $("guide").style.display = mode === "closeup" ? "block" : "none";
+    setHint(HINT[mode]);
+  });
+  function stopScanning() { scanning = false; $("shutter").classList.remove("recording"); if (!busy) setHint(HINT[mode]); }
+  $("shutter").onclick = async () => {
+    if (mode === "closeup") { if (!busy) { buzz(15); await send([await grab(CLOSEUP_EDGE, CLOSEUP_QUALITY)]); } return; }
+    if (scanning) { stopScanning(); return; }
+    scanning = true; buzz(15); $("shutter").classList.add("recording"); setHint("Recording – pan slowly. Tap to stop.");
     while (scanning) {
       const frames = [];
-      for (let i = 0; i < FRAMES_PER_SEGMENT && scanning; i++) { frames.push(await grab()); $("live").textContent = `● Recording ${i + 1}/${FRAMES_PER_SEGMENT}`; await sleep(FRAME_GAP_MS); }
-      $("live").textContent = "Camera on";
+      for (let i = 0; i < FRAMES_PER_SEGMENT && scanning; i++) { frames.push(await grab(VIDEO_EDGE, VIDEO_QUALITY)); await sleep(FRAME_GAP_MS); }
       if (!scanning) break;  // stopped mid-segment: drop the unfinished segment instead of paying for it
       await send(frames);
     }
   };
+
+  async function send(frames) {
+    const fd = new FormData(); frames.forEach((b, i) => fd.append("frames", new File([b], `f${i}.jpg`, { type: "image/jpeg" })));
+    busy = true; $("shutter").classList.add("busy"); if (!scanning) setHint("Analysing…");
+    try {
+      const r = await api("/api/scans", { method: "POST", body: fd });
+      buzz([10, 40, 10]);
+      if (r.summary) progress(r.summary);
+      await loadScans();
+      showCard(view.scans.find(s => s.id === r.scan.id) || r.scan);
+    } catch (e) {
+      toast(e.message); buzz(200);
+      if (scanning) await sleep(3000);
+    } finally {
+      busy = false; $("shutter").classList.remove("busy");
+      if (!scanning) setHint(HINT[mode]);
+    }
+  }
+
+  // ------------------------------------------------------------------ results data
+  async function loadScans() {
+    try {
+      view = await api("/api/phone/scans");
+      if (view.summary) progress(view.summary);
+      const n = view.scans.length, last = view.scans[n - 1];
+      $("count").hidden = !n; $("count").textContent = n;
+      $("thumb").innerHTML = last ? `<img src="/api/scans/${last.id}/frames/0" alt="">` : "☰";
+      if (cardScan && !view.scans.some(s => s.id === cardScan)) hideCard();
+      if ($("sheet").classList.contains("show")) renderSheet();
+    } catch (e) { /* ping reports connection problems */ }
+  }
+  function objectRow(scanId, o, i) {
+    const tag = o.item_id ? `<span class="tag ok">${esc(o.item_id)}</span>` : `<span class="tag">Not on listing</span>`;
+    const attrs = (o.attributes || []).map(a => `<div class="attr">${esc(a.name)}: ${esc(a.value)}</div>`).join("");
+    const basis = o.match_basis && !["description", "none", "auditor"].includes(o.match_basis) ? " · matched by " + esc(o.match_basis) : "";
+    return `<div class="obj"><div style="flex:1;min-width:0"><div class="name">${esc(o.name)} <span class="sub">× ${o.count}</span></div>${attrs}
+      <div class="sub">${Math.round(o.confidence * 100)}% sure${basis}</div></div>
+      <div style="display:flex;align-items:center;gap:4px">${tag}<button class="x" data-rmobj="${scanId}:${i}" aria-label="Remove this item">✕</button></div></div>`;
+  }
+
+  // ------------------------------------------------------------------ latest-result card
+  function showCard(scan) {
+    cardScan = scan.id;
+    const n = scan.objects.length;
+    $("result").innerHTML = `<div class="rhead"><div><b>${n ? `${n} item${n === 1 ? "" : "s"} found` : "Nothing identified"}</b> <small>${esc(scan.id)} · ${scan.kind === "photo" ? "close-up" : "scan"}</small></div>
+      <div style="display:flex;gap:6px;align-items:center"><button class="tbtn danger" data-rmscan="${scan.id}" data-label="Remove">Remove</button><button class="x" id="hideCard" aria-label="Close">✕</button></div></div>
+      ${scan.objects.map((o, i) => objectRow(scan.id, o, i)).join("") || `<div class="sub">${esc(scan.notes || "Try moving closer or improving the light.")}</div>`}`;
+    $("result").classList.add("show");
+    bindRemovals($("result"));
+    $("hideCard").onclick = hideCard;
+    clearTimeout(cardTimer); if (!scanning) cardTimer = setTimeout(hideCard, 12000);
+  }
+  function hideCard() { $("result").classList.remove("show"); cardScan = null; }
+
+  // ------------------------------------------------------------------ results sheet
+  function renderSheet() {
+    const s = view.summary;
+    $("summary").innerHTML = s ? [["ok", "Verified", s.verified], ["warn", "Check", s.check], ["bad", "Exception", s.exception], ["", "To scan", s.not_scanned]]
+      .map(([c, l, v]) => `<div class="${c}"><span>${l}</span><b>${v}</b></div>`).join("") : "";
+    $("list").innerHTML = view.scans.length ? view.scans.slice().reverse().map(sc => `<div class="scan">
+      <div class="meta"><img src="/api/scans/${sc.id}/frames/0" alt="" loading="lazy"><div><b>${esc(sc.id)} · ${sc.kind === "photo" ? "Close-up" : "Scan"}</b>
+        <span class="sub">${esc(sc.taken_at)} · ${sc.objects.length} item${sc.objects.length === 1 ? "" : "s"}</span></div>
+        <button class="tbtn danger" data-rmscan="${sc.id}" data-label="Delete">Delete</button></div>
+      ${sc.objects.map((o, i) => objectRow(sc.id, o, i)).join("")}</div>`).join("")
+      : `<div class="empty">No results yet.<br>Scans you take appear here.</div>`;
+    bindRemovals($("list"));
+  }
+  function openSheet() { renderSheet(); $("sheet").classList.add("show"); loadScans(); }
+  function closeSheet() { $("sheet").classList.remove("show"); }
+  $("resultsBtn").onclick = openSheet;
+  $("closeSheet").onclick = closeSheet;
+  $("sheet").onclick = (e) => { if (e.target === $("sheet")) closeSheet(); };
+  setInterval(() => { if ($("sheet").classList.contains("show")) loadScans(); }, 4000);
+
+  // Whole scans need a second tap to confirm; a single detected item goes with one tap.
+  function bindRemovals(root) {
+    root.querySelectorAll("[data-rmscan]").forEach(b => b.onclick = async () => {
+      if (!b.classList.contains("confirm")) {
+        b.classList.add("confirm"); b.textContent = "Tap to confirm";
+        setTimeout(() => { b.classList.remove("confirm"); b.textContent = b.dataset.label; }, 3000);
+        return;
+      }
+      try { await api(`/api/scans/${b.dataset.rmscan}`, { method: "DELETE" }); buzz(20); toast("Scan removed", true); if (cardScan === b.dataset.rmscan) hideCard(); await loadScans(); }
+      catch (e) { toast(e.message); }
+    });
+    root.querySelectorAll("[data-rmobj]").forEach(b => b.onclick = async () => {
+      const [scanId, i] = b.dataset.rmobj.split(":");
+      try {
+        view = await api(`/api/scans/${scanId}/objects/${i}`, { method: "DELETE" }); buzz(10);
+        const sc = view.scans.find(s => s.id === scanId);
+        if (cardScan === scanId && sc) showCard(sc);
+        await loadScans();
+      } catch (e) { toast(e.message); }
+    });
+  }
 })();
 </script>
 </body>

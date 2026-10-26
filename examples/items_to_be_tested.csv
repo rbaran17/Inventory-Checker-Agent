@@ -1,0 +1,7 @@
+item_id,description,expected_qty,location,serial_number,model_number,manufacturer,asset_tag
+IT-0001,Laptop computer,1,Office 2.14,C02XK1ZZJG5H,A2337,Apple,FA-10021
+IT-0002,Computer monitor,2,Office 2.14,,P2422H,Dell,
+IT-0003,Docking station,1,Office 2.14,8VTXQ93,WD19S,Dell,FA-10044
+WH-0101,Cordless drill,4,Aisle 3 Shelf A,,DCD771C2,DeWalt,
+WH-0102,Pallet of paint cans (4 L),6,Aisle 2 Bay 1,,,,
+WH-0103,Fire extinguisher,2,Wall rack B,FE-2291-88,,Amerex,

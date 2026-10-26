@@ -1,9 +1,9 @@
 # Inventory Checker Agent
 
-**Count inventory with a phone camera.** An AI agent built on
-[Microsoft Agent Framework](https://github.com/microsoft/agent-framework) identifies the objects in short video
-clips from a phone and matches them automatically to the items an auditor sampled from the client's
-inventory listing.
+**Count and verify inventory with a phone camera.** An AI agent built on
+[Microsoft Agent Framework](https://github.com/microsoft/agent-framework) identifies the objects in a short
+video or close-up photo, reads serial numbers, model numbers and other label details, and matches everything
+automatically against the auditor's **items to be tested listing**.
 
 Runs with **Anthropic Claude** (default: Claude Haiku 5.5), **Azure OpenAI** or **OpenAI**, all through MAF.
 You can also plug in your own detector.
@@ -13,31 +13,36 @@ License: [MIT](LICENSE) · Status: proof of concept
 
 ---
 
-## What it does
+## The workflow
 
-It follows the auditor's physical inventory count:
+The laptop app walks the auditor through five steps:
 
-| Step | Auditor workflow | In the app |
-|---|---|---|
-| 1 | Receive the client's inventory **population** (book quantities by SKU and location) | A fake population of 35 everyday items is built in. Upload your own CSV |
-| 2 | Draw a **sample** | Every item above a value threshold plus a seeded random selection |
-| 3 | **Count** the sampled items at the location | Pan the phone camera over the shelf. Every few seconds a short video segment goes to the model, which identifies and counts the objects |
-| 4 | **Compare** counts with book quantities | Each detected object is mapped to a SKU. Sampled items show **Match**, **Difference** or **Not counted yet** |
+| Step | What happens |
+|---|---|
+| **1. Items to be tested** | Upload the listing (CSV or Excel): item ID, description, expected quantity, location, plus any attributes to verify, such as serial number, model number, manufacturer or asset tag. Add the engagement details |
+| **2. Connect phone** | Scan the QR code. The phone opens a secure camera page, with no app to install |
+| **3. Scan & match** | **Scan** mode pans across items. **Close-up** mode reads a label. Each object is counted, its label details are read, and it is matched to a listed item. A matching serial number overrides a description match |
+| **4. Review exceptions** | For every quantity difference, mismatched or unreadable attribute, or near match (a likely one-character misread), see expected vs read side by side and record **Accept** or **Follow up** with a note |
+| **5. Summary & export** | KPIs and a results table. Download an **Excel** workbook (summary, results, detections, objects not on the listing) or a CSV |
+
+The **Demo** tab runs the same workflow on twelve everyday home and office items, with data kept separate
+from the engagement. Edit the expected brand, model or serial number of something on your desk to see
+matches and exceptions.
 
 ```
- Phone  (/scan)                         Laptop  (/)
- ┌───────────────────────┐            ┌────────────────────────────────────────┐
- │ live camera           │  4 frames  │ FastAPI                                │
- │ Scan video  │  Photo  │───────────▶│  └─ MAF Agent ── Anthropic | Azure     │
- │ detections + matches  │◀───────────│                  OpenAI | OpenAI |     │
- └───────────────────────┘   result   │                  your DETECTOR         │
-         ▲  HTTPS                     │  population · sample · assessment      │
-         │  (tunnel or your domain)   └────────────────────────────────────────┘
-         └── QR code on the laptop page ──┘
+ Phone  (/scan)                          Laptop  (/)
+ ┌────────────────────────┐            ┌─────────────────────────────────────────┐
+ │ full-screen camera     │  frames    │ FastAPI                                 │
+ │ Scan │ Close-up        │───────────▶│  └─ MAF Agent ── Anthropic | Azure      │
+ │ latest result · remove │◀───────────│                  OpenAI | OpenAI | own  │
+ │ Results sheet          │  objects,  │  listing · reconcile · compare · review │
+ └────────────────────────┘  labels    └─────────────────────────────────────────┘
+          ▲  HTTPS (tunnel or your domain)
+          └── QR code on the laptop page
 ```
 
-On the laptop you see the phone's connection status, every scan with its frames, the detected objects (with a
-dropdown to correct any match), and the sample-vs-count table, which you can download as CSV.
+The model is told **which** attributes to read, never the expected values, so it cannot simply echo
+them back. The comparison happens in code.
 
 ## Quick start (Docker)
 
@@ -51,8 +56,9 @@ docker compose up --build
 ```
 
 1. In the logs, find **"Open on the laptop: http://localhost:8000/?key=…"** and open that link on your laptop.
-2. Wait for **"Tunnel ready: https://….trycloudflare.com"**. The QR code on the page then points the phone there.
-3. Scan the QR code with the phone, tap **Start camera**, then **Scan video** (pan slowly) or **Photo**.
+2. Wait for **"Tunnel ready: https://….trycloudflare.com"**. The QR code in step 2 then points the phone there.
+3. Try the **Demo** tab first: scan the QR code with the phone, tap **Start camera**, and point it at things on
+   your desk.
 
 Compose runs two containers: `app`, and `tunnel`. `tunnel` is a free Cloudflare quick tunnel that gives the
 phone the HTTPS address its browser needs before it allows the camera. The app reads the tunnel's address
@@ -82,7 +88,7 @@ export PUBLIC_BASE_URL=https://<random-words>.trycloudflare.com
 inventory-checker serve
 ```
 
-Open the printed **"Open on the laptop"** link, then scan the QR code with the phone.
+Open the printed **"Open on the laptop"** link, then follow the steps on the page.
 
 > Use `127.0.0.1`, not `localhost`, in the tunnel command: on macOS `localhost` resolves to IPv6 first, while
 > the app listens on IPv4.
@@ -129,20 +135,35 @@ APIs. Details, keyless Azure setup and model choice: **[docs/providers.md](docs/
 One request per scan. A 4-frame segment is about 6,000 input tokens plus a few hundred output tokens: roughly
 **$0.001** on Claude Haiku 5.5, or about a cent per minute of continuous scanning. Frames are downscaled on
 the phone before upload, and the phone waits for each answer before recording the next segment. Pressing
-**Stop** mid-segment discards that segment. Other providers' prices differ.
+**Stop** mid-segment discards that segment. A close-up is one larger frame (2048 px, for small label text),
+about half the cost of a video segment. Other providers' prices differ.
 
 ## Using it
 
 | Where | What to do |
 |---|---|
-| Laptop: **Client population** | Upload a CSV with `sku, description, location, book_qty, unit_cost`, or keep the fake one. Example: [`examples/population.csv`](examples/population.csv) |
-| Laptop: **Draw the sample** | Random count, value threshold and seed. Redrawing keeps existing scans and re-checks them |
-| Phone | **Start camera**, then **Scan video** to pan (tap **Stop** to end), or **Photo** for one frame |
-| Laptop: **Detections** | Each scan with frames and objects. Fix a wrong match in the dropdown (★ = sampled item) |
-| Laptop: **Sample vs camera count** | Status per sampled item, plus items seen but not sampled and items not in the population. **Download results CSV** |
+| Laptop: step 1 | Engagement tab: add client, location, count date and your name, then drop the listing file (or **Download template**). Demo tab: edit expected values if you like |
+| Phone | **Start camera**. **Scan**: tap the red button and pan slowly, tap again to stop. **Close-up**: fit the label in the frame and tap |
+| Phone: result card | Pops up after each scan. **Remove** discards the scan, and **✕** removes one detected object (for example something in the background) |
+| Phone: Results | Thumbnail button, bottom left: every scan with its objects, plus delete per scan (tap twice) or per object |
+| Laptop: step 3 | Live detections with frames and label values. Correct a match with the dropdown |
+| Laptop: step 4 | Accept or flag each exception, with a note |
+| Laptop: step 5 | Results and downloads |
 
-The counted quantity for a SKU is the **highest count in any single scan**, so filming a shelf twice doesn't
-double count. Within a scan the model is told the frames overlap and to count each item once.
+**Listing format.** CSV or `.xlsx`, with one row per item:
+
+```csv
+item_id,description,expected_qty,location,serial_number,model_number,manufacturer
+IT-0001,Laptop computer,1,Office 2.14,C02XK1ZZJG5H,A2337,Apple
+IT-0002,Computer monitor,2,Office 2.14,,P2422H,Dell
+```
+
+- Common header variations are recognised (`SKU`, `Qty`, `Book qty`, `Bin`, …).
+- Every other column becomes an attribute to verify.
+- A blank cell means *record what is read*.
+- Values are compared ignoring case, spaces and punctuation.
+
+See [docs/extending.md](docs/extending.md#the-items-to-be-tested-listing) for the full rules.
 
 ## Configuration
 
@@ -154,7 +175,7 @@ The most used settings are below. The full table is in [docs/deployment.md](docs
 | `AI_MAX_TOKENS` | `4000` | Output cap per scan |
 | `PUBLIC_BASE_URL` | discovered from tunnel | HTTPS address the phone opens |
 | `APP_ACCESS_KEY` | generated once, then reused | Access key in the QR code and laptop link |
-| `POPULATION_CSV` | built-in fake | Population loaded at startup |
+| `SAMPLE_FILE` | – | Items to be tested listing loaded into the Engagement tab at startup |
 | `DETECTOR` | – | Custom detector `module:function` |
 
 ## Extending
@@ -163,7 +184,7 @@ The most used settings are below. The full table is in [docs/deployment.md](docs
 - **Your own detector** (local YOLO or ONNX model, internal service, barcode or RFID reader): set
   `DETECTOR=pkg.module:function`. See [`examples/custom_detector.py`](examples/custom_detector.py).
 - **Counting rules:** edit the prompt in `detection.INSTRUCTIONS`.
-- **Sampling and matching:** edit the pure functions in `population.py`.
+- **Matching and comparison rules:** edit the pure functions in `sample.py`.
 - **API:** small JSON API used by both pages.
 
 See **[docs/extending.md](docs/extending.md)**.
@@ -186,12 +207,13 @@ See **[docs/deployment.md](docs/deployment.md)**.
 src/inventory_checker/
   detection.py     MAF agent, prompt, provider-neutral answer schema, custom detector loader
   providers.py     Anthropic / Azure OpenAI / OpenAI chat clients and the provider registry
-  population.py    fake population, CSV import, sampling, assessment
+  sample.py        items to be tested listing: CSV/Excel import, demo items, reconcile, compare, assess
+  export.py        results CSV and Excel workbook
   api.py           FastAPI app, access key, in-memory state
   tunnel.py        discovers the Cloudflare quick-tunnel address
   cli.py           `inventory-checker serve`
-  static/          scan.html (phone), dashboard.html (laptop)
-examples/          sample population CSV, custom detector
+  static/          scan.html (phone camera), dashboard.html (laptop workflow)
+examples/          example items to be tested listing, custom detector
 docs/              providers, extending, deployment
 tests/             unit and API tests; providers tested against local fakes of their APIs
 Dockerfile, compose.yaml, .github/workflows/

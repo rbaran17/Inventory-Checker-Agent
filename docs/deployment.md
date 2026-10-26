@@ -82,7 +82,7 @@ The CA is only used for `pip` during the build and is not stored in the image.
 | `TUNNEL_METRICS_URL` | – | cloudflared metrics address for automatic discovery |
 | `APP_ACCESS_KEY` | generated once | Fixed access key |
 | `APP_ACCESS_KEY_FILE` | `~/.config/inventory-checker/access_key` (`/data/access_key` in Docker) | Where the generated key is saved |
-| `POPULATION_CSV` | built-in fake | Population loaded at startup |
+| `SAMPLE_FILE` | – | Items to be tested listing (CSV or .xlsx) loaded into the Engagement tab at startup |
 | `HOST`, `PORT` | `127.0.0.1`, `8000` (`0.0.0.0` in Docker) | Listen address |
 | `LAPTOP_URL` | `http://localhost:<port>` | Base of the printed laptop link |
 | `MAX_UPLOAD_BYTES` | 15 MB | Upload limit per scan |

@@ -19,7 +19,7 @@ Run the app locally with `inventory-checker serve` (see the README for the phone
 - Provider-specific code belongs in `src/inventory_checker/providers.py`; the detector in `detection.py`
   must stay provider-neutral (one strict JSON schema that every supported provider accepts).
 - New behaviour needs a test. Tests must not call real model APIs or spend credits.
-- Never commit API keys, `.env`, certificates or real client data. Use the fake population for examples.
+- Never commit API keys, `.env`, certificates or real client data. Use the demo listing or `examples/items_to_be_tested.csv` for examples.
 - Keep pull requests focused, and describe how you tested them.
 
 ## Adding a model provider

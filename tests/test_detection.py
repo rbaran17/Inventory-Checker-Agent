@@ -14,16 +14,18 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from inventory_checker import detection, providers
-from inventory_checker.population import FAKE_POPULATION
+from inventory_checker.sample import demo_sample
+
+SAMPLE = demo_sample()
 
 ANTHROPIC_UNSUPPORTED = {"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
                          "minLength", "maxLength"}
 
 REPLY = {"objects": [
-    {"name": "coffee mug", "count": 2, "confidence": 0.93, "visible_text": None, "matched_sku": "KIT-3001",
+    {"name": "coffee mug", "count": 2, "confidence": 0.93, "matched_item_id": "DEMO-07", "attributes": [],
      "notes": ""},
-    {"name": "stress ball", "count": 1, "confidence": 0.7, "visible_text": None, "matched_sku": "XYZ-999",
-     "notes": ""},
+    {"name": "laptop", "count": 1, "confidence": 0.9, "matched_item_id": "XYZ-999",
+     "attributes": [{"name": "Brand", "value": "Apple"}, {"name": "Serial number", "value": " "}], "notes": ""},
 ], "image_quality": "good", "notes": ""}
 
 
@@ -130,13 +132,14 @@ FRAMES = [(b"\xff\xd8frame%d" % i, "image/jpeg") for i in range(4)]
 
 
 def _check_result(result):
-    assert [o.matched_sku for o in result.objects] == ["KIT-3001", None]  # invented SKU dropped
-    assert "unknown SKU XYZ-999" in result.objects[1].notes
+    assert [o.matched_item_id for o in result.objects] == ["DEMO-07", None]  # invented ID dropped
+    assert "unknown item XYZ-999" in result.objects[1].notes
+    assert [(a.name, a.value) for a in result.objects[1].attributes] == [("Brand", "Apple")]  # blank value dropped
 
 
 def test_anthropic_claude_haiku(fake):
     client = providers.build_anthropic(api_key="test-key", base_url=fake["url"])
-    _check_result(asyncio.run(detection.detect(client, FRAMES, FAKE_POPULATION)))
+    _check_result(asyncio.run(detection.detect(client, FRAMES, SAMPLE)))
     [req] = fake["requests"]
     body = req["body"]
     assert req["path"].startswith("/v1/messages")
@@ -146,12 +149,14 @@ def test_anthropic_claude_haiku(fake):
     assert "thinking" not in body and "temperature" not in body
     content = body["messages"][0]["content"]
     assert [b["type"] for b in content] == ["image"] * 4 + ["text"]  # images first, one request
-    assert "4 consecutive video frames" in content[-1]["text"]
+    prompt = content[-1]["text"]
+    assert "4 consecutive video frames" in prompt and "DEMO-07" in prompt
+    assert "Attributes to read: Brand, Model number, Serial number" in prompt
 
 
 def test_openai(fake):
     client = providers.build_openai(api_key="sk-test", model="vision-model", base_url=fake["url"] + "/v1")
-    _check_result(asyncio.run(detection.detect(client, FRAMES, FAKE_POPULATION)))
+    _check_result(asyncio.run(detection.detect(client, FRAMES, SAMPLE)))
     [req] = fake["requests"]
     body = req["body"]
     assert req["path"] == "/v1/chat/completions" and body["model"] == "vision-model"
@@ -167,7 +172,7 @@ def test_openai(fake):
 def test_azure_openai(fake):
     client = providers.build_azure_openai(endpoint=fake["url"], deployment="my-vision-deployment",
                                           api_key="azure-key", api_version="2024-10-21")
-    _check_result(asyncio.run(detection.detect(client, FRAMES, FAKE_POPULATION)))
+    _check_result(asyncio.run(detection.detect(client, FRAMES, SAMPLE)))
     [req] = fake["requests"]
     assert req["path"].startswith("/openai/deployments/my-vision-deployment/chat/completions")
     assert "api-version=2024-10-21" in req["path"]
@@ -176,17 +181,17 @@ def test_azure_openai(fake):
 
 
 def test_out_of_range_answer_is_clamped(fake):
-    fake["reply"] = {"objects": [{"name": "mug", "count": -2, "confidence": 3, "visible_text": None,
-                                  "matched_sku": None, "notes": ""}], "image_quality": "good", "notes": ""}
+    fake["reply"] = {"objects": [{"name": "mug", "count": -2, "confidence": 3, "matched_item_id": None,
+                                  "attributes": [], "notes": ""}], "image_quality": "good", "notes": ""}
     client = providers.build_anthropic(api_key="test-key", base_url=fake["url"])
-    [obj] = asyncio.run(detection.detect(client, FRAMES[:1], FAKE_POPULATION)).objects
+    [obj] = asyncio.run(detection.detect(client, FRAMES[:1], SAMPLE)).objects
     assert obj.count == 0 and obj.confidence == 1.0
 
 
 def test_frames_are_capped(fake):
     fake["reply"] = {"objects": [], "image_quality": "poor", "notes": "dark"}
     client = providers.build_anthropic(api_key="test-key", base_url=fake["url"])
-    asyncio.run(detection.detect(client, [(b"\xff\xd8x", "image/jpeg")] * 10, FAKE_POPULATION))
+    asyncio.run(detection.detect(client, [(b"\xff\xd8x", "image/jpeg")] * 10, SAMPLE))
     images = [b for b in fake["requests"][0]["body"]["messages"][0]["content"] if b["type"] == "image"]
     assert len(images) == detection.MAX_FRAMES
 
@@ -233,12 +238,21 @@ def test_register_custom_provider(clean_env):
         providers._REGISTRY.pop("dummy")
 
 
-async def my_detector(frames, population):  # used by test_custom_detector_plugin
+async def my_detector(frames, sample):  # used by test_custom_detector_plugin
     return detection.SceneResult(objects=[detection.DetectedObject(name="x", count=1, confidence=1)])
 
 
 def test_custom_detector_plugin(clean_env):
     fn = detection.load_custom_detector("tests.test_detection:my_detector")
-    assert asyncio.run(fn([], [])).objects[0].name == "x"
+    assert asyncio.run(fn([], SAMPLE)).objects[0].name == "x"
     with pytest.raises(ValueError):
         detection.load_custom_detector("no-colon")
+
+
+def test_expected_values_are_never_sent_to_the_model(fake):
+    sample = demo_sample()
+    sample.items[0].attributes["Serial number"] = "SECRET-SERIAL-123"
+    client = providers.build_anthropic(api_key="test-key", base_url=fake["url"])
+    asyncio.run(detection.detect(client, FRAMES[:1], sample))
+    assert "SECRET-SERIAL-123" not in json.dumps(fake["requests"][0]["body"])
+    assert "close-up photo" in fake["requests"][0]["body"]["messages"][0]["content"][-1]["text"]

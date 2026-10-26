@@ -21,12 +21,14 @@ Whatever you choose, the model must accept **images**: use a vision-capable mode
 Each scan (one photo, or a video segment of up to 6 frames) is **one** chat request:
 
 1. System instructions: how to identify, count and match objects (`detection.INSTRUCTIONS`).
-2. One user turn with the frames as image parts, followed by the client population as JSON.
+2. One user turn with the frames as image parts, followed by the items to be tested (ID and description
+   only) and the names of the attributes to read. Expected attribute values are **never** sent.
 3. A strict JSON-schema answer format (`detection.RESPONSE_FORMAT`). It follows the strictest common
    subset of both APIs' structured-output rules: every property is required, every object sets
    `additionalProperties: false`, nullable fields use `anyOf`, and there are no numeric limits.
    Ranges such as `0 ≤ confidence ≤ 1` are enforced when the answer is parsed.
-4. A SKU the model returns that isn't in the population is dropped, with a note.
+4. An item ID the model returns that isn't on the listing is dropped, with a note. Attribute values are
+   compared with the listing in code (`sample.compare`), not by the model.
 
 The tests in `tests/test_detection.py` replay this against local fakes of the Anthropic Messages API, the
 OpenAI Chat Completions API and Azure OpenAI. The fakes reject the schemas the real APIs reject.

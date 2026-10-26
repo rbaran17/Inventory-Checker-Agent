@@ -1,7 +1,7 @@
 [project]
 name = "inventory-checker-agent"
-version = "0.3.0"
-description = "Count inventory with a phone camera: an AI agent on Microsoft Agent Framework identifies objects in video and matches them to an audit sample."
+version = "0.4.0"
+description = "Count and verify inventory with a phone camera: an AI agent on Microsoft Agent Framework identifies objects, reads serial and model numbers, and matches them to an audit sample."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -31,6 +31,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pydantic>=2.7",
     "qrcode[pil]>=7.4",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
