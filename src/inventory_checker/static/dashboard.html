@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory Count POC</title>
+<style>
+  :root { --bg:#f5f7fb; --panel:#fff; --ink:#152033; --muted:#5d6b82; --line:#dfe4ee; --accent:#00338d; --amber:#fff1c7; --amberInk:#8a5a00; --red:#c62828; --redBg:#fde3e3; --green:#1f8a4c; --greenBg:#dff3e7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { background:var(--accent); color:#fff; padding:10px 18px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+  header h1 { font-size:17px; margin:0; }
+  main { padding:16px; max-width:1400px; margin:0 auto; display:grid; grid-template-columns:minmax(0,3fr) minmax(300px,2fr); gap:14px; }
+  @media (max-width: 960px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  h2 { font-size:15px; margin:0 0 10px; } h2 .step { display:inline-block; width:22px; height:22px; border-radius:50%; background:var(--accent); color:#fff; text-align:center; font-size:12px; line-height:22px; margin-right:6px; }
+  table { width:100%; border-collapse:collapse; } th, td { text-align:left; padding:6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--muted); font-weight:600; } td.num, th.num { text-align:right; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; background:#eef1f7; color:var(--muted); white-space:nowrap; }
+  .pill.ok { background:var(--greenBg); color:var(--green); } .pill.warn { background:var(--amber); color:var(--amberInk); } .pill.bad { background:var(--redBg); color:var(--red); }
+  button { padding:7px 12px; border-radius:7px; border:1px solid var(--accent); background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--accent); } button.small { padding:3px 8px; font-size:12px; }
+  input, select { padding:6px 8px; border:1px solid var(--line); border-radius:7px; font:inherit; background:#fff; color:var(--ink); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .muted { color:var(--muted); }
+  #qr svg { width:200px; height:200px; } details summary { cursor:pointer; color:var(--accent); font-weight:600; }
+  .scan { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:10px; }
+  .frames { display:flex; gap:6px; overflow-x:auto; margin:6px 0; } .frames img { height:72px; border-radius:6px; }
+  .kpis { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; } .kpi { flex:1; min-width:110px; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .kpi b { font-size:20px; display:block; }
+  #toast { position:fixed; bottom:16px; right:16px; background:var(--ink); color:#fff; padding:10px 14px; border-radius:8px; display:none; max-width:420px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Inventory Count POC</h1>
+  <div class="row"><span id="ai"></span><span id="phone"></span></div>
+</header>
+<main>
+  <div>
+    <div class="card">
+      <h2><span class="step">3</span>Sample vs camera count</h2>
+      <div class="kpis" id="kpis"></div>
+      <table><thead><tr><th>SKU</th><th>Description</th><th>Location</th><th class="num">Book qty</th><th class="num">Counted</th><th class="num">Diff</th><th>Status</th><th>Evidence</th></tr></thead><tbody id="sampleRows"></tbody></table>
+      <div class="row" style="margin-top:10px"><button class="ghost small" id="csvBtn">Download results CSV</button></div>
+      <div id="extras"></div>
+    </div>
+    <div class="card">
+      <h2><span class="step">1</span>Client population</h2>
+      <p class="muted" style="margin-top:-4px">A fake population of everyday items is loaded so you can test at a desk. Upload your own CSV (columns <code>sku, description, location, book_qty, unit_cost</code>) to replace it.</p>
+      <div class="row"><input type="file" id="popFile" accept=".csv,text/csv"><button class="ghost small" id="popReset">Reset to fake population</button></div>
+      <details style="margin-top:8px"><summary id="popSummary">Show population</summary><table style="margin-top:6px"><thead><tr><th>SKU</th><th>Description</th><th>Location</th><th class="num">Book qty</th><th class="num">Unit cost</th><th class="num">Value</th><th>Sample</th></tr></thead><tbody id="popRows"></tbody></table></details>
+    </div>
+    <div class="card">
+      <h2><span class="step">2</span>Draw the sample</h2>
+      <div class="row">
+        <label>Random items <input type="number" id="size" min="0" style="width:70px"></label>
+        <label>plus every item worth at least <input type="number" id="threshold" min="0" style="width:90px"></label>
+        <label>seed <input type="number" id="seed" style="width:80px"></label>
+        <button id="drawBtn">Draw sample</button>
+      </div>
+      <p class="muted">Changing the sample keeps the scans; the results table re-checks them against the new sample.</p>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>Count with your phone</h2>
+      <div class="row" style="align-items:flex-start">
+        <div id="qr"></div>
+        <div style="flex:1;min-width:180px"><b>Scan this with the phone's camera.</b>
+          <ol class="muted" style="padding-left:18px">
+            <li>Tap the link, then <b>Start camera</b> and allow access.</li>
+            <li>Tap <b>Scan video</b> and pan slowly across the items, or tap <b>Photo</b>.</li>
+            <li>Detections appear below within a few seconds and are matched to the sample automatically.</li>
+          </ol>
+          <code class="muted" id="qrUrl" style="word-break:break-all;font-size:11px"></code></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><h2 style="margin:0">Detections <span class="muted" id="scanCount"></span></h2><button class="ghost small" id="clearBtn">Clear scans</button></div>
+      <p class="muted">If the AI matched something wrongly, change it in the dropdown.</p>
+      <div id="scans"><p class="muted">No scans yet.</p></div>
+    </div>
+  </div>
+</main>
+<div id="toast"></div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const toast = (m) => { const t = $("toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 5000); };
+  async function api(path, opts = {}) {
+    const o = Object.assign({ headers: {} }, opts);
+    if (o.json !== undefined) { o.body = JSON.stringify(o.json); o.headers["Content-Type"] = "application/json"; o.method = o.method || "POST"; }
+    const r = await fetch(path, o); const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || r.statusText); return body;
+  }
+  let state = null, lastSig = "", paramsLoaded = false;
+  const STATUS = { match: ["ok", "Match"], difference: ["bad", "Difference"], not_counted: ["", "Not counted yet"] };
+
+  function render(s) {
+    state = s;
+    $("ai").innerHTML = s.ai_ready ? `<span class="pill ok">AI: ${esc(s.model)}</span>` : '<span class="pill bad">AI off – set ANTHROPIC_API_KEY</span>';
+    $("phone").innerHTML = s.phone.connected ? '<span class="pill ok">📱 Phone connected</span>' : `<span class="pill">📱 ${s.phone.last_seen_seconds == null ? "No phone yet" : "Phone last seen " + s.phone.last_seen_seconds + "s ago"}</span>`;
+    if (!paramsLoaded) { $("size").value = s.sample_params.size ?? 6; $("threshold").value = s.sample_params.value_threshold ?? ""; $("seed").value = s.sample_params.seed ?? ""; paramsLoaded = true; }
+    const sig = JSON.stringify([s.scans.map(x => [x.id, x.objects.map(o => o.matched_sku)]), s.population.map(p => [p.sku, p.sampled])]);
+    if (sig === lastSig) return; lastSig = sig;
+    const a = s.assessment, sum = a.summary;
+    $("kpis").innerHTML = [["Sampled items", sum.match + sum.difference + sum.not_counted], ["Match", sum.match], ["Difference", sum.difference], ["Not counted", sum.not_counted]].map(([k, v]) => `<div class="kpi"><span class="muted">${k}</span><b>${v}</b></div>`).join("");
+    $("sampleRows").innerHTML = a.sample.map(r => { const [cls, label] = STATUS[r.status];
+      return `<tr><td>${esc(r.sku)}</td><td>${esc(r.description)}<br><span class="muted">${r.sample_reason === "value_threshold" ? "high value" : "random"}</span></td><td>${esc(r.location)}</td><td class="num">${r.book_qty}</td><td class="num">${r.counted_qty ?? "–"}</td><td class="num">${r.difference == null ? "–" : (r.difference > 0 ? "+" : "") + r.difference}</td><td><span class="pill ${cls}">${label}</span></td><td>${r.evidence_scan ? `<a href="#${r.evidence_scan}">${r.evidence_scan}</a>` : ""}</td></tr>`; }).join("");
+    $("extras").innerHTML = (a.seen_not_sampled.length ? `<h2 style="margin-top:14px">Seen but not in the sample</h2><p class="muted">${a.seen_not_sampled.map(x => `${esc(x.sku)} ${esc(x.description)} × ${x.counted_qty}`).join(" · ")}</p>` : "")
+      + (a.not_in_population.length ? `<h2 style="margin-top:14px">Seen but not in the population</h2><p class="muted">${a.not_in_population.map(x => `${esc(x.name)} × ${x.count} (${x.scan_id})`).join(" · ")}</p>` : "");
+    $("popSummary").textContent = `Show population (${s.population.length} items, ${s.population.filter(p => p.sampled).length} sampled)`;
+    $("popRows").innerHTML = s.population.map(p => `<tr><td>${esc(p.sku)}</td><td>${esc(p.description)}</td><td>${esc(p.location)}</td><td class="num">${p.book_qty}</td><td class="num">${p.unit_cost}</td><td class="num">${p.value.toLocaleString()}</td><td>${p.sampled ? `<span class="pill ok">${p.sample_reason === "value_threshold" ? "high value" : "random"}</span>` : ""}</td></tr>`).join("");
+    const options = (sel) => `<option value="">— no match —</option>` + s.population.map(p => `<option value="${esc(p.sku)}" ${p.sku === sel ? "selected" : ""}>${esc(p.sku)} ${esc(p.description)}${p.sampled ? " ★" : ""}</option>`).join("");
+    $("scanCount").textContent = `(${s.scans.length})`;
+    $("scans").innerHTML = s.scans.length ? s.scans.slice().reverse().map(sc => `<div class="scan" id="${sc.id}">
+      <div class="row" style="justify-content:space-between"><b>${sc.id}</b><span class="muted">${sc.taken_at} · ${sc.frames} frame(s) · ${sc.seconds}s · image ${esc(sc.image_quality)} <button class="ghost small" data-del="${sc.id}">Remove</button></span></div>
+      <div class="frames">${Array.from({ length: sc.frames }, (_, i) => `<a href="/api/scans/${sc.id}/frames/${i}" target="_blank"><img loading="lazy" src="/api/scans/${sc.id}/frames/${i}"></a>`).join("")}</div>
+      ${sc.notes ? `<div class="muted">${esc(sc.notes)}</div>` : ""}
+      <table><thead><tr><th>Object</th><th class="num">Count</th><th>Matched to</th></tr></thead><tbody>${sc.objects.map((o, i) => `<tr><td>${esc(o.name)}<br><span class="muted">${Math.round(o.confidence * 100)}%${o.visible_text ? " · “" + esc(o.visible_text) + "”" : ""}${o.notes ? " · " + esc(o.notes) : ""}</span></td><td class="num">${o.count}</td><td><select data-scan="${sc.id}" data-i="${i}" style="max-width:220px">${options(o.matched_sku)}</select><br>${o.matched_sku ? (o.sampled ? '<span class="pill ok">in sample</span>' : '<span class="pill warn">not sampled</span>') : ""} <span class="muted">${o.mapped_by === "you" ? "set by you" : "AI"}</span></td></tr>`).join("") || '<tr><td colspan="3" class="muted">Nothing identified.</td></tr>'}</tbody></table></div>`).join("") : '<p class="muted">No scans yet.</p>';
+    $("scans").querySelectorAll("select[data-scan]").forEach(sel => sel.onchange = async () => { try { render(await api(`/api/scans/${sel.dataset.scan}/objects/${sel.dataset.i}`, { json: { sku: sel.value || null } })); } catch (e) { toast(e.message); } });
+    $("scans").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { render(await api(`/api/scans/${b.dataset.del}`, { method: "DELETE" })); });
+  }
+
+  async function refresh() { try { render(await api("/api/state")); } catch (e) { toast(e.message); } }
+  $("drawBtn").onclick = async () => { const num = (id) => $(id).value === "" ? null : Number($(id).value);
+    try { lastSig = ""; render(await api("/api/sample", { json: { size: num("size") ?? 0, value_threshold: num("threshold"), seed: num("seed") } })); toast("Sample drawn"); } catch (e) { toast(e.message); } };
+  $("popFile").onchange = async (e) => { try { lastSig = ""; render(await api("/api/population", { json: { csv: await e.target.files[0].text() } })); toast("Population loaded and sample redrawn"); } catch (err) { toast(err.message); } e.target.value = ""; };
+  $("popReset").onclick = async () => { lastSig = ""; render(await api("/api/population/reset", { method: "POST" })); toast("Fake population restored"); };
+  $("clearBtn").onclick = async () => { if (confirm("Remove all scans?")) render(await api("/api/scans", { method: "DELETE" })); };
+  $("csvBtn").onclick = () => {
+    const rows = [["sku", "description", "location", "book_qty", "counted_qty", "difference", "status", "sample_reason", "evidence_scan"], ...state.assessment.sample.map(r => [r.sku, r.description, r.location, r.book_qty, r.counted_qty ?? "", r.difference ?? "", r.status, r.sample_reason, r.evidence_scan ?? ""])];
+    const blob = new Blob([rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "sample_count_results.csv"; a.click();
+  };
+  api("/api/qr").then(r => { $("qr").innerHTML = r.svg; $("qrUrl").textContent = r.url.replace(/key=.*/, "key=…"); }).catch(e => toast(e.message));
+  refresh(); setInterval(refresh, 2000);
+})();
+</script>
+</body>
+</html>

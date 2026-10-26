@@ -1,113 +1,89 @@
 from __future__ import annotations
 
-import io
-
 from fastapi.testclient import TestClient
-from openpyxl import load_workbook
 
 from inventory_checker.api import create_app
 from inventory_checker.config import Settings
-from inventory_checker.store import sha256_hex
+from inventory_checker.detection import DetectedObject, SceneResult
 
-from .conftest import LEAD, LISTING, OBS
-
-L = {"X-User": LEAD}
-O = {"X-User": OBS}
+KEY = "test-key-123"
 
 
-def make_client(tmp_path, service=None):
-    st = Settings(data_dir=tmp_path, public_base_url="https://observe.test")
-    return TestClient(create_app(st, service=service, use_env_client=False))
+def make(detector=None, use_env_client=False):
+    app = create_app(Settings(public_base_url="https://tunnel.example", access_key=KEY), detector=detector,
+                     use_env_client=use_env_client)
+    return TestClient(app)
 
 
-def test_end_to_end_capture_to_export(tmp_path):
-    c = make_client(tmp_path)
-    assert c.get("/api/me").status_code == 401
-    s = c.post("/api/sessions", headers=L, json={"engagement": "FY26", "client": "Acme", "location": "WH1",
-                                                  "count_date": "2026-12-31", "tolerance_units": 1}).json()
-    sid = s["id"]
-    assert c.post(f"/api/sessions/{sid}/zones", headers=L, json={"code": "B"}).status_code == 200
-    assert c.post(f"/api/sessions/{sid}/listing", headers=L, json={"csv": LISTING}).json() == {"imported": 13}
-
-    pairing = c.post(f"/api/sessions/{sid}/pairing", headers=L).json()
-    assert pairing["url"].startswith("https://observe.test/pair?token=") and "<svg" in pairing["qr_svg"]
-    token = pairing["url"].split("token=")[1]
-    paired = c.post("/api/pair/redeem", headers=O, json={"token": token}).json()
-    bearer = {"Authorization": f"Bearer {paired['device_token']}"}
-    assert paired["session"]["client"] == "Acme"
-    assert c.post("/api/pair/redeem", headers=O, json={"token": token}).status_code == 403
-
-    rec = c.post(f"/api/sessions/{sid}/records", headers=O, json={
-        "type": "test_count", "data": {"sku": "FG-2001", "auditor_count": 40, "direction": "floor_to_sheet",
-                                       "zone": "B", "tag_no": "1043"}}).json()
-    assert rec["data"]["difference"] == -2 and rec["data"]["over_tolerance"] is True
-    assert c.get("/api/device/me", headers=bearer).json()["active_record"]["id"] == rec["id"]
-
-    img = b"\xff\xd8\xff\xe0 photo of pumps"
-    bad = c.post("/api/capture", headers=bearer, files={"file": ("x.jpg", img, "image/jpeg")},
-                 data={"sha256": "0" * 64, "kind": "photo", "capture_time": "2026-12-31T10:00:00Z"})
-    assert bad.status_code == 422
-    ok = c.post("/api/capture", headers=bearer, files={"file": ("x.jpg", img, "image/jpeg")},
-                data={"sha256": sha256_hex(img), "kind": "photo", "capture_time": "2026-12-31T10:00:00Z",
-                      "zone": "B"}).json()
-    assert ok["record_ids"] == [rec["id"]]  # attached to the record open on the laptop
-    content = c.get(f"/api/evidence/{ok['evidence_id']}/content", headers=O)
-    assert content.content == img and content.headers["x-content-sha256"] == sha256_hex(img)
-
-    assert c.post("/api/device/heartbeat", headers=bearer, json={"battery_level": 0.5, "queued_uploads": 1}).json()["ok"]
-    r = c.post(f"/api/sessions/{sid}/close", headers=O, json={})
-    assert r.status_code == 409 and r.json()["status"] == "blocked"
-    c.post("/api/device/heartbeat", headers=bearer, json={"battery_level": 0.5, "queued_uploads": 0})
-    c.post(f"/api/sessions/{sid}/records", headers=O, json={
-        "type": "tag_control", "data": {"range_start": 1000, "range_end": 1100, "used": ["1000-1090"],
-                                        "unused": ["1091-1100"]}})
-    r = c.post(f"/api/sessions/{sid}/close", headers=O, json={})
-    assert r.status_code == 409 and any(i["kind"] == "unexplained_difference" for i in r.json()["open_items"])
-    r = c.post(f"/api/records/{rec['id']}/corrections", headers=O,
-               json={"changes": {"explanation": "2 pumps staged on dock for shipment SO-551"}, "reason": "add explanation"})
-    assert r.status_code == 200
-    r = c.post(f"/api/sessions/{sid}/close", headers=O, json={})
-    assert r.status_code == 200, r.json()
-    # closed: phone uploads refused, device unpaired
-    assert c.get("/api/device/me", headers=bearer).status_code == 403
-
-    xlsx = c.get(f"/api/sessions/{sid}/export/schedule.xlsx", headers=L)
-    wb = load_workbook(io.BytesIO(xlsx.content))
-    assert wb["Test Counts"].cell(2, 5).value == "FG-2001"
-    assert c.get(f"/api/sessions/{sid}/export/schedule.csv", headers=L).text.startswith("record_id,")
-    assert c.get(f"/api/sessions/{sid}/export/package.zip", headers=L).headers["content-type"] == "application/zip"
-    audit = c.get(f"/api/sessions/{sid}/audit", headers=L).json()
-    assert audit["chain_valid"] and any(e["action"] == "session.close" for e in audit["events"])
-
-    for rr in c.get(f"/api/sessions/{sid}/records", headers=L).json():
-        assert c.post(f"/api/records/{rr['id']}/review", headers=L, json={"action": "approve"}).status_code == 200
-    assert c.post(f"/api/sessions/{sid}/sign-off", headers=L).json()["status"] == "reviewed"
+def authed(detector=None):
+    c = make(detector)
+    r = c.get(f"/?key={KEY}", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/"
+    return c
 
 
-def test_outsiders_cannot_read_session(tmp_path):
-    c = make_client(tmp_path)
-    sid = c.post("/api/sessions", headers=L, json={"engagement": "E", "client": "C", "location": "L",
-                                                    "count_date": "2026-12-31"}).json()["id"]
-    assert c.get(f"/api/sessions/{sid}", headers={"X-User": "stranger@firm.example"}).status_code == 403
+def test_access_key_required():
+    c = make()
+    assert c.get("/").status_code == 401
+    assert c.get("/api/state").status_code == 401
+    assert c.get("/?key=wrong").status_code == 401
+    c = authed()
+    assert "Inventory Count POC" in c.get("/").text and "Count Camera" in c.get("/scan").text
+    qr = c.get("/api/qr").json()
+    assert qr["url"] == f"https://tunnel.example/scan?key={KEY}" and "<svg" in qr["svg"]
 
 
-def test_ai_endpoints_report_unconfigured(tmp_path):
-    c = make_client(tmp_path)
-    sid = c.post("/api/sessions", headers=L, json={"engagement": "E", "client": "C", "location": "L",
-                                                    "count_date": "2026-12-31"}).json()["id"]
-    assert c.post(f"/api/sessions/{sid}/copilot", headers=L, json={"message": "hi"}).status_code == 503
+def test_scan_flow_end_to_end():
+    calls = []
+
+    async def fake_detector(frames, population):
+        calls.append(len(frames))
+        return SceneResult(objects=[
+            DetectedObject(name="laptop", count=1, confidence=0.95, matched_sku="OFF-1001"),
+            DetectedObject(name="pen", count=5, confidence=0.8, matched_sku="STA-2001"),
+            DetectedObject(name="rubber duck", count=1, confidence=0.6),
+        ], image_quality="good")
+
+    c = authed(fake_detector)
+    s = c.get("/api/state").json()
+    assert s["ai_ready"] and len(s["population"]) == 35
+    s = c.post("/api/sample", json={"size": 3, "value_threshold": 500, "seed": 1}).json()
+    sampled = {p["sku"] for p in s["population"] if p["sampled"]}
+    assert "OFF-1001" in sampled  # laptop is worth 1,400: always sampled
+
+    assert c.post("/api/ping").json()["ok"]
+    assert c.get("/api/state").json()["phone"]["connected"]
+
+    files = [("frames", (f"f{i}.jpg", b"\xff\xd8frame", "image/jpeg")) for i in range(4)]
+    r = c.post("/api/scans", files=files).json()
+    assert calls == [4] and r["scan"]["id"] == "scan_001" and r["scan"]["frames"] == 4
+    rows = {x["sku"]: x for x in r["assessment"]["sample"]}
+    assert rows["OFF-1001"]["status"] == "match"
+    assert c.get("/api/scans/scan_001/frames/3").content == b"\xff\xd8frame"
+
+    # correct a wrong mapping by hand
+    s = c.post("/api/scans/scan_001/objects/2", json={"sku": "HOM-4002"}).json()
+    assert s["scans"][0]["objects"][2]["mapped_by"] == "you"
+    assert c.post("/api/scans/scan_001/objects/2", json={"sku": "NOPE"}).status_code == 400
+
+    assert c.post("/api/scans", files=[("frames", ("x.gif", b"GIF8", "image/gif"))]).status_code == 400
+    assert c.delete("/api/scans").json()["scans"] == []
 
 
-def test_pages_served(tmp_path):
-    c = make_client(tmp_path)
-    assert "Inventory Observation" in c.get("/").text
-    assert "Count Camera" in c.get("/pair").text
+def test_without_api_key_scans_are_refused_clearly():
+    c = authed(None)
+    assert c.get("/api/state").json()["ai_ready"] is False
+    r = c.post("/api/scans", files=[("frames", ("f.jpg", b"\xff\xd8", "image/jpeg"))])
+    assert r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"]
 
 
-def test_dev_cookie_sign_in_is_url_decoded_and_observers_planned(tmp_path):
-    c = make_client(tmp_path)
-    sid = c.post("/api/sessions", headers=L, json={"engagement": "E", "client": "C", "location": "L",
-                                                    "count_date": "2026-12-31", "observers": [OBS]}).json()["id"]
-    c.cookies.set("ic_user", "observer%40firm.example")
-    assert c.get("/api/me").json()["user"] == OBS
-    assert c.get(f"/api/sessions/{sid}").status_code == 200
+def test_population_upload_redraws_sample_and_clears_stale_matches():
+    async def det(frames, population):
+        return SceneResult(objects=[DetectedObject(name="mug", count=2, confidence=0.9, matched_sku="KIT-3001")])
+
+    c = authed(det)
+    c.post("/api/scans", files=[("frames", ("f.jpg", b"\xff\xd8", "image/jpeg"))])
+    s = c.post("/api/population", json={"csv": "sku,description,location,book_qty,unit_cost\nW1,Mug,Shelf,2,5\n"}).json()
+    assert [p["sku"] for p in s["population"]] == ["W1"]
+    assert s["scans"][0]["objects"][0]["matched_sku"] is None
+    assert c.post("/api/population", json={"csv": "bad"}).status_code == 400

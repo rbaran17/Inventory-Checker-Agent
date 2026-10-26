@@ -1,3 +1,3 @@
-"""Inventory Checker Agent: physical inventory observation on Microsoft Agent Framework."""
+"""Inventory Checker Agent: phone camera scan, object detection and sample-listing match on MAF."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

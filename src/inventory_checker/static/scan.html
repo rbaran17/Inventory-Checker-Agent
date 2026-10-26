@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Count Camera</title>
+<style>
+  :root { --bg:#0b0f17; --panel:#151b26; --ink:#eef2f8; --muted:#9aa6b8; --accent:#2f7df6; --amber:#f2b33d; --red:#e5484d; --green:#2fb36f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:10px 14px; background:var(--panel); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .muted { color:var(--muted); font-size:13px; }
+  #view { position:relative; background:#000; width:100%; aspect-ratio:3/4; max-height:58vh; overflow:hidden; }
+  video { width:100%; height:100%; object-fit:cover; }
+  .badge { position:absolute; top:10px; padding:4px 10px; border-radius:99px; font-size:13px; background:rgba(0,0,0,.6); }
+  #live { left:10px; } #busy { right:10px; display:none; }
+  #start { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; padding:24px; text-align:center; }
+  .bar { display:flex; gap:8px; padding:10px 14px; }
+  button { flex:1; padding:16px 10px; border:0; border-radius:12px; font-size:16px; font-weight:600; color:#fff; background:var(--accent); }
+  button.secondary { background:#2a3344; } button.stop { background:var(--red); }
+  button:disabled { opacity:.45; }
+  #results { padding:0 14px 30px; }
+  .obj { display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid #222b3a; }
+  .pill { font-size:12px; padding:2px 8px; border-radius:99px; background:#2a3344; color:var(--muted); white-space:nowrap; }
+  .pill.ok { background:rgba(47,179,111,.2); color:var(--green); } .pill.warn { background:rgba(242,179,61,.2); color:var(--amber); }
+  .err { color:var(--red); } .ok { color:var(--green); }
+</style>
+</head>
+<body>
+<header>
+  <div><b>Count Camera</b><div class="muted" id="status">Connecting…</div></div>
+  <div class="muted" style="text-align:right">Sample <b id="progress">–</b><br><span id="cost">0 scans</span></div>
+</header>
+<div id="view">
+  <video id="video" playsinline muted autoplay></video>
+  <div class="badge" id="live">Camera off</div>
+  <div class="badge" id="busy">Analysing…</div>
+  <div id="start"><div>Point the camera at the inventory. <b>Scan video</b> sends a few frames every few seconds while you pan slowly; <b>Photo</b> sends one picture.</div><button id="camBtn" style="flex:0;padding:14px 28px">Start camera</button></div>
+</div>
+<div class="bar">
+  <button id="videoBtn" disabled>Scan video</button>
+  <button id="photoBtn" class="secondary" disabled>Photo</button>
+</div>
+<div class="muted" style="padding:0 14px 6px" id="hint"></div>
+<div id="results"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const FRAMES_PER_SEGMENT = 4, FRAME_GAP_MS = 900, MAX_EDGE = 1280, QUALITY = 0.8;
+  let stream = null, scanning = false, busy = false, scans = 0, wakeLock = null;
+
+  async function api(path, opts = {}) {
+    const r = await fetch(path, opts);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    return body;
+  }
+
+  async function ping() {
+    try {
+      const r = await api("/api/ping", { method: "POST" });
+      $("status").innerHTML = r.ai_ready ? '<span class="ok">● Connected</span>' : '<span class="err">● Connected, but AI is off on the laptop</span>';
+    } catch (e) { $("status").innerHTML = `<span class="err">● ${esc(e.message)}</span>`; }
+  }
+  setInterval(ping, 5000); ping();
+
+  $("camBtn").onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+      $("video").srcObject = stream; $("start").style.display = "none"; $("live").textContent = "Camera on";
+      $("videoBtn").disabled = $("photoBtn").disabled = false;
+      try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+    } catch (e) { $("hint").innerHTML = `<span class="err">Camera unavailable: ${esc(e.message)}. The page must be opened over https.</span>`; }
+  };
+  document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && stream) { try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {} } });
+
+  function grab() {
+    const v = $("video"), scale = Math.min(1, MAX_EDGE / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement("canvas"); c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    return new Promise(res => c.toBlob(res, "image/jpeg", QUALITY));
+  }
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  async function send(frames) {
+    const fd = new FormData(); frames.forEach((b, i) => fd.append("frames", new File([b], `f${i}.jpg`, { type: "image/jpeg" })));
+    busy = true; $("busy").style.display = "block";
+    try {
+      const r = await api("/api/scans", { method: "POST", body: fd });
+      scans++; $("cost").textContent = `${scans} scan${scans === 1 ? "" : "s"}`;
+      show(r.scan, r.assessment);
+    } catch (e) { $("hint").innerHTML = `<span class="err">${esc(e.message)}</span>`; if (scanning) await sleep(3000); }
+    finally { busy = false; $("busy").style.display = "none"; }
+  }
+
+  function show(scan, a) {
+    const s = a.summary, total = s.match + s.difference + s.not_counted;
+    $("progress").textContent = `${s.match + s.difference}/${total} counted`;
+    $("hint").textContent = `${scan.id}: ${scan.frames} frame(s), ${scan.seconds}s, image ${scan.image_quality}${scan.notes ? " – " + scan.notes : ""}`;
+    $("results").innerHTML = scan.objects.length ? scan.objects.map(o => {
+      const tag = !o.matched_sku ? '<span class="pill">not in population</span>' : o.sampled ? `<span class="pill ok">sample ${esc(o.matched_sku)}</span>` : `<span class="pill warn">${esc(o.matched_sku)} not sampled</span>`;
+      return `<div class="obj"><div><b>${esc(o.name)}</b> × ${o.count}<div class="muted">${Math.round(o.confidence * 100)}% sure${o.visible_text ? " · “" + esc(o.visible_text) + "”" : ""}</div></div><div>${tag}</div></div>`;
+    }).join("") : '<p class="muted">Nothing identified in this view.</p>';
+  }
+
+  $("photoBtn").onclick = async () => { if (!busy) await send([await grab()]); };
+  $("videoBtn").onclick = async () => {
+    if (scanning) { scanning = false; $("videoBtn").textContent = "Scan video"; $("videoBtn").className = ""; return; }
+    scanning = true; $("videoBtn").textContent = "Stop"; $("videoBtn").className = "stop"; $("hint").textContent = "Pan slowly across the shelf…";
+    while (scanning) {
+      const frames = [];
+      for (let i = 0; i < FRAMES_PER_SEGMENT && scanning; i++) { frames.push(await grab()); $("live").textContent = `● Recording ${i + 1}/${FRAMES_PER_SEGMENT}`; await sleep(FRAME_GAP_MS); }
+      $("live").textContent = "Camera on";
+      if (!scanning) break;  // stopped mid-segment: drop the unfinished segment instead of paying for it
+      await send(frames);
+    }
+  };
+})();
+</script>
+</body>
+</html>
