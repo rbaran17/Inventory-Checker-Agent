@@ -91,7 +91,11 @@
       const r = await api("/api/scans", { method: "POST", body: fd });
       scans++; $("cost").textContent = `${scans} scan${scans === 1 ? "" : "s"}`;
       show(r.scan, r.assessment);
-    } catch (e) { $("hint").innerHTML = `<span class="err">${esc(e.message)}</span>`; if (scanning) await sleep(3000); }
+    } catch (e) {
+      $("hint").innerHTML = `<span class="err">Scan failed: ${esc(e.message)}</span>`;
+      $("results").innerHTML = `<div style="background:rgba(229,72,77,.15);border:1px solid var(--red);border-radius:10px;padding:12px;margin-top:6px"><b class="err">Scan not saved</b><div style="margin-top:4px;word-break:break-word">${esc(e.message)}</div></div>`;
+      if (scanning) await sleep(3000);
+    }
     finally { busy = false; $("busy").style.display = "none"; }
   }
 

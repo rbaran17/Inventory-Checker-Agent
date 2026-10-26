@@ -10,6 +10,7 @@ State is in memory (this build is a proof of concept); restarting clears it.
 from __future__ import annotations
 
 import io
+import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,8 @@ from pydantic import BaseModel, Field
 from . import detection
 from .config import Settings
 from .population import FAKE_POPULATION, Item, assess, draw_sample, parse_population_csv
+
+log = logging.getLogger("inventory_checker")
 
 Detector = Callable[[list[tuple[bytes, str]], list[Item]], Awaitable[detection.SceneResult]]
 
@@ -189,7 +192,8 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         started = time.time()
         try:
             result = await detector(images, state["population"])
-        except Exception as exc:
+        except Exception as exc:  # report model/API errors to the phone and the server log
+            log.exception("Detection failed")
             raise HTTPException(502, f"Detection failed: {exc}") from exc
         scan_id = f"scan_{state['next_scan']:03d}"
         state["next_scan"] += 1

@@ -17,6 +17,7 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
+import anthropic
 from agent_framework import Agent, Content, Message
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,16 @@ class SceneResult(BaseModel):
     objects: list[DetectedObject] = Field(default_factory=list)
     image_quality: Literal["good", "usable", "poor"] = "usable"
     notes: str = ""
+
+
+def response_schema() -> dict[str, Any]:
+    """SceneResult as a schema Claude's structured outputs accept.
+
+    The API rejects numeric limits (``minimum``/``maximum``) and needs ``additionalProperties: false`` on
+    every object. The MAF connector sends a Pydantic schema as-is, so the Anthropic SDK's
+    ``transform_schema`` cleans it first; the limits are enforced when the answer is parsed below.
+    """
+    return {"schema": anthropic.transform_schema(SceneResult)}
 
 
 def model_name() -> str:
@@ -103,8 +114,8 @@ async def detect(client: Any, frames: list[tuple[bytes, str]], population: list[
         Content.from_text(f"Client inventory population:\n{population_json}\n\n"
                           f"Identify, count and match the objects in {what}."),
     ])
-    response = await agent.run(message, options={"response_format": SceneResult})
-    result = response.value if response.value is not None else SceneResult.model_validate_json(response.text)
+    response = await agent.run(message, options={"response_format": response_schema()})
+    result = SceneResult.model_validate_json(response.text)
     valid = {i.sku for i in population}
     for obj in result.objects:
         if obj.matched_sku and obj.matched_sku not in valid:
