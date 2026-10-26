@@ -87,3 +87,14 @@ def test_population_upload_redraws_sample_and_clears_stale_matches():
     assert [p["sku"] for p in s["population"]] == ["W1"]
     assert s["scans"][0]["objects"][0]["matched_sku"] is None
     assert c.post("/api/population", json={"csv": "bad"}).status_code == 400
+
+
+def test_access_key_survives_restarts(monkeypatch, tmp_path):
+    from inventory_checker.config import load_or_create_access_key
+
+    monkeypatch.delenv("APP_ACCESS_KEY", raising=False)
+    monkeypatch.setenv("APP_ACCESS_KEY_FILE", str(tmp_path / "key"))
+    first = load_or_create_access_key()
+    assert load_or_create_access_key() == first and (tmp_path / "key").stat().st_mode & 0o777 == 0o600
+    monkeypatch.setenv("APP_ACCESS_KEY", "fixed")
+    assert load_or_create_access_key() == "fixed"

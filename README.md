@@ -40,7 +40,9 @@ inventory-checker serve
 
 `serve` prints a link that includes an access key. Open it on the laptop, then scan the QR code with
 the phone. Without the key, the app refuses every request, so nobody who finds the tunnel address can
-use it or your API credits. A new key is generated at each start; set `APP_ACCESS_KEY` to keep one.
+use it or your API credits. The key is created on first start, saved in
+`~/.config/inventory-checker/access_key` and reused after restarts. Delete that file to get a new one,
+or set `APP_ACCESS_KEY`.
 
 ## Using it
 
@@ -70,7 +72,7 @@ the next segment, so calls never pile up. Pressing Stop mid-segment discards tha
 | `CLAUDE_EFFORT` | `low` | `low` … `max`; higher is slower and costs more |
 | `CLAUDE_MAX_TOKENS` | `4000` | Output cap per segment |
 | `PUBLIC_BASE_URL` | `http://localhost:8000` | Address the QR code points to |
-| `APP_ACCESS_KEY` | random | Fixed access key |
+| `APP_ACCESS_KEY` | saved random key | Fixed access key |
 
 ## Code
 
