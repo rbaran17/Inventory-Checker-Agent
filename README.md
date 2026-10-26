@@ -32,7 +32,7 @@ The phone needs HTTPS. The simplest way is a Cloudflare quick tunnel:
 
 ```bash
 # window 1
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://127.0.0.1:8000
 # window 2 (use the https://….trycloudflare.com address window 1 prints)
 export PUBLIC_BASE_URL=https://<random-words>.trycloudflare.com
 inventory-checker serve
