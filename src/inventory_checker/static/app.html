@@ -379,7 +379,7 @@
   $("signinBtn").onclick = () => { document.cookie = "ic_user=" + encodeURIComponent($("email").value.trim()) + "; path=/; SameSite=Strict"; boot(); };
   async function boot() {
     try { me = await api("/api/me"); } catch (e) { $("signin").classList.remove("hidden"); return; }
-    $("signin").classList.add("hidden"); $("whoami").textContent = me.user + (me.ai_assist ? " · AI assist on" : " · AI assist off") + (me.knowledge ? " · methodology: " + me.knowledge.source : "");
+    $("signin").classList.add("hidden"); $("whoami").textContent = me.user + (me.ai_assist ? " · AI: " + (me.model || "on") : " · AI assist off") + (me.knowledge ? " · methodology: " + me.knowledge.source : "");
     if (!me.ai_assist) $("copilotCard").classList.add("hidden");
     await loadSessions();
     setInterval(refresh, 3000);

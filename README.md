@@ -69,12 +69,17 @@ network is needed.
 ### AI configuration
 
 AI assist is optional. With nothing configured, the app works and the AI buttons and copilot are hidden.
+Choose the model provider with `AI_PROVIDER`. If it is unset, the first provider configured in this order is used:
 
-| Variable | Purpose |
-|---|---|
-| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` | Recommended: Azure OpenAI in the firm's approved tenant. Signs in with `DefaultAzureCredential` |
-| `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION` | Optional key-based auth / API version |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | Local development only |
+| `AI_PROVIDER` | Settings | Notes |
+|---|---|---|
+| `claude` | `ANTHROPIC_API_KEY`; optional `CLAUDE_MODEL` (default `claude-opus-5-5`), `CLAUDE_EFFORT` (default `medium`), `CLAUDE_MAX_TOKENS` (default 16000) | Claude API via MAF's `agent-framework-anthropic`. Server-side refusal fallback is on |
+| `claude-foundry` | `ANTHROPIC_FOUNDRY_RESOURCE`, `ANTHROPIC_FOUNDRY_API_KEY` | Claude in the firm's Azure tenant (Microsoft Foundry). No server-side fallback there |
+| `azure` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`; optional `AZURE_OPENAI_API_KEY` (else Entra ID), `AZURE_OPENAI_API_VERSION` | Azure OpenAI |
+| `openai` | `OPENAI_API_KEY`, `OPENAI_MODEL` | Local development only |
+| `none` | | AI off |
+
+Check which model is active in the observation app header, or with `GET /api/me`.
 
 ### Audit knowledge (methodology grounding)
 

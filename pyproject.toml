@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "agent-framework-core>=1.23.0",
     "agent-framework-openai>=1.17.0",
+    "agent-framework-anthropic>=1.0.0b261022",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
