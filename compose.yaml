@@ -1,0 +1,32 @@
+# docker compose up        -> app on http://localhost:8000 plus a Cloudflare quick tunnel for the phone
+# docker compose up app    -> app only (bring your own HTTPS address via PUBLIC_BASE_URL)
+name: inventory-checker
+
+services:
+  app:
+    image: inventory-checker-agent:local
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    # Provider keys and other settings come from .env (see .env.example).
+    # Leave PUBLIC_BASE_URL unset to use the tunnel below; the app reads its address automatically.
+    environment:
+      TUNNEL_METRICS_URL: http://tunnel:2000
+      LAPTOP_URL: http://localhost:${APP_PORT:-8000}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"   # laptop only; the phone comes in through the tunnel
+    volumes:
+      - app-data:/data                       # keeps the access key across restarts
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.3}
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 --url http://app:8000
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  app-data:

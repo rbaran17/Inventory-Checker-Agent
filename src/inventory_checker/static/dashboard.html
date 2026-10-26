@@ -74,7 +74,8 @@
             <li>Tap <b>Scan video</b> and pan slowly across the items, or tap <b>Photo</b>.</li>
             <li>Detections appear below within a few seconds and are matched to the sample automatically.</li>
           </ol>
-          <code class="muted" id="qrUrl" style="word-break:break-all;font-size:11px"></code></div>
+          <code class="muted" id="qrUrl" style="word-break:break-all;font-size:11px"></code>
+          <div id="qrWarn" class="pill bad" style="display:none;white-space:normal;margin-top:8px;padding:6px 10px"></div></div>
       </div>
     </div>
     <div class="card">
@@ -102,7 +103,7 @@
 
   function render(s) {
     state = s;
-    $("ai").innerHTML = s.ai_ready ? `<span class="pill ok">AI: ${esc(s.model)}</span>` : '<span class="pill bad">AI off – set ANTHROPIC_API_KEY</span>';
+    $("ai").innerHTML = s.ai_ready ? `<span class="pill ok">AI: ${esc(s.model)}</span>` : '<span class="pill bad">AI off – configure a provider</span>';
     $("phone").innerHTML = s.phone.connected ? '<span class="pill ok">📱 Phone connected</span>' : `<span class="pill">📱 ${s.phone.last_seen_seconds == null ? "No phone yet" : "Phone last seen " + s.phone.last_seen_seconds + "s ago"}</span>`;
     if (!paramsLoaded) { $("size").value = s.sample_params.size ?? 6; $("threshold").value = s.sample_params.value_threshold ?? ""; $("seed").value = s.sample_params.seed ?? ""; paramsLoaded = true; }
     const sig = JSON.stringify([s.scans.map(x => [x.id, x.objects.map(o => o.matched_sku)]), s.population.map(p => [p.sku, p.sampled])]);
@@ -137,7 +138,14 @@
     const blob = new Blob([rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n")], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "sample_count_results.csv"; a.click();
   };
-  api("/api/qr").then(r => { $("qr").innerHTML = r.svg; $("qrUrl").textContent = r.url.replace(/key=.*/, "key=…"); }).catch(e => toast(e.message));
+  function loadQr() {
+    api("/api/qr").then(r => {
+      $("qr").innerHTML = r.svg; $("qrUrl").textContent = r.url.replace(/key=.*/, "key=…");
+      $("qrWarn").style.display = r.warning ? "block" : "none"; $("qrWarn").textContent = r.warning || "";
+      if (r.warning) setTimeout(loadQr, 5000);  // keep checking until the tunnel address is known
+    }).catch(e => toast(e.message));
+  }
+  loadQr();
   refresh(); setInterval(refresh, 2000);
 })();
 </script>

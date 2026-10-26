@@ -1,11 +1,31 @@
 [project]
 name = "inventory-checker-agent"
-version = "0.2.0"
-description = "Inventory count POC: phone camera video, object detection with Claude Haiku 5.5 on Microsoft Agent Framework, automatic match to the audit sample."
+version = "0.3.0"
+description = "Count inventory with a phone camera: an AI agent on Microsoft Agent Framework identifies objects in video and matches them to an audit sample."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Inventory-Checker-Agent contributors" }]
+keywords = ["audit", "inventory", "computer-vision", "agents", "microsoft-agent-framework", "claude", "azure-openai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
 dependencies = [
     "agent-framework-core>=1.23.0",
     "agent-framework-anthropic>=1.0.0b261022",
+    "agent-framework-openai>=1.17.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
@@ -14,13 +34,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
+azure = ["azure-identity>=1.17"]   # keyless Azure OpenAI sign-in (Entra ID / managed identity)
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "build>=1.2"]
 
 [project.scripts]
 inventory-checker = "inventory_checker.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/rbaran17/inventory-checker-agent"
+Issues = "https://github.com/rbaran17/inventory-checker-agent/issues"
+
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -31,10 +56,11 @@ inventory_checker = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 120
+target-version = "py310"
 
 [tool.ruff.lint]
 ignore = ["B008", "SIM102"]  # B008: FastAPI Depends/File/Form defaults are the framework idiom

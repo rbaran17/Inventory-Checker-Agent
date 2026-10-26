@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import secrets
 import time
-from collections.abc import Awaitable, Callable
 from importlib import resources
 from typing import Any
 from urllib.parse import quote
@@ -24,13 +24,13 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
-from . import detection
+from . import detection, providers
 from .config import Settings
 from .population import FAKE_POPULATION, Item, assess, draw_sample, parse_population_csv
 
 log = logging.getLogger("inventory_checker")
 
-Detector = Callable[[list[tuple[bytes, str]], list[Item]], Awaitable[detection.SceneResult]]
+Detector = detection.Detector
 
 ALLOWED_IMAGES = {"image/jpeg", "image/png", "image/webp"}
 PHONE_TIMEOUT_SECONDS = 20
@@ -51,17 +51,39 @@ class MappingIn(BaseModel):
     sku: str | None
 
 
+def _detector_from_env() -> tuple[Detector | None, str | None]:
+    """Custom ``DETECTOR`` if set, else a MAF agent on the selected provider. Returns (detector, label)."""
+    if spec := os.getenv("DETECTOR"):
+        return detection.load_custom_detector(spec), f"custom: {spec}"
+    built = providers.build_chat_client()
+    if built is None:
+        return None, None
+    client, name, model = built
+
+    async def run(frames: list[tuple[bytes, str]], population: list[Item]) -> detection.SceneResult:
+        return await detection.detect(client, frames, population)
+
+    return run, f"{name}: {model}"
+
+
+def _initial_population() -> list[Item]:
+    path = os.getenv("POPULATION_CSV")
+    if not path:
+        return list(FAKE_POPULATION)
+    with open(path, encoding="utf-8-sig") as fh:
+        return parse_population_csv(fh.read())
+
+
 def create_app(settings: Settings | None = None, *, detector: Detector | None = None,
-               use_env_client: bool = True) -> FastAPI:
+               use_env_client: bool = True, ai_label: str | None = None) -> FastAPI:
     settings = settings or Settings()
     if detector is None and use_env_client:
-        client = detection.build_client()
-        if client is not None:
-            async def detector(frames: list[tuple[bytes, str]], population: list[Item]) -> detection.SceneResult:
-                return await detection.detect(client, frames, population)
+        detector, ai_label = _detector_from_env()
+    elif detector is not None and ai_label is None:
+        ai_label = "custom detector"
 
     app = FastAPI(title="Inventory Checker Agent", version="0.2.0")
-    state: dict[str, Any] = {"population": list(FAKE_POPULATION), "sample": {}, "sample_params": {},
+    state: dict[str, Any] = {"population": _initial_population() if use_env_client else list(FAKE_POPULATION), "sample": {}, "sample_params": {},
                              "scans": [], "images": {}, "next_scan": 1, "phone_seen": None, "phone_agent": ""}
 
     def _draw(size: int, value_threshold: float | None, seed: int | None) -> None:
@@ -72,10 +94,13 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
     app.state.data = state
     app.state.settings = settings
     app.state.ai_ready = detector is not None
+    app.state.ai_label = ai_label
 
     # ------------------------------------------------------------------ access key
     @app.middleware("http")
     async def require_key(request: Request, call_next):
+        if request.url.path == "/healthz":  # container health checks carry no key
+            return await call_next(request)
         key = request.query_params.get("key")
         if key and secrets.compare_digest(key, settings.access_key):
             if request.method == "GET" and not request.url.path.startswith("/api"):
@@ -110,7 +135,7 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         seen = state["phone_seen"]
         return {
             "ai_ready": detector is not None,
-            "model": detection.model_name() if detector is not None else None,
+            "model": ai_label if detector is not None else None,
             "phone": {"connected": seen is not None and time.time() - seen < PHONE_TIMEOUT_SECONDS,
                       "last_seen_seconds": round(time.time() - seen) if seen else None,
                       "device": state["phone_agent"]},
@@ -126,12 +151,22 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         return _snapshot()
 
     @app.get("/api/qr")
-    def qr():
-        url = f"{settings.public_base_url.rstrip('/')}/scan?key={quote(settings.access_key)}"
+    def qr(request: Request):
+        public = settings.resolve_public_url()
+        base = public or str(request.base_url).rstrip("/")
+        url = f"{base}/scan?key={quote(settings.access_key)}"
         img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=8)
         buf = io.BytesIO()
         img.save(buf)
-        return {"url": url, "svg": buf.getvalue().decode()}
+        warning = None
+        if not base.startswith("https://"):
+            warning = ("This address is not HTTPS, so the phone will not allow the camera. Start the tunnel "
+                       "(see README) or set PUBLIC_BASE_URL, then reload this page.")
+        return {"url": url, "svg": buf.getvalue().decode(), "public": public is not None, "warning": warning}
+
+    @app.get("/healthz")
+    def healthz():
+        return {"status": "ok", "ai_ready": detector is not None, "public_url": settings.public_base_url}
 
     @app.post("/api/ping")
     def ping(request: Request):
@@ -174,7 +209,8 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
     @app.post("/api/scans")
     async def create_scan(frames: list[UploadFile] = File(...)):
         if detector is None:
-            raise HTTPException(503, "AI is not configured: set ANTHROPIC_API_KEY and restart the server")
+            raise HTTPException(503, "No AI provider is configured: set ANTHROPIC_API_KEY, or the Azure OpenAI / "
+                                     "OpenAI settings (see README), and restart the server")
         if not 1 <= len(frames) <= detection.MAX_FRAMES:
             raise HTTPException(400, f"Send 1 to {detection.MAX_FRAMES} frames")
         images: list[tuple[bytes, str]] = []

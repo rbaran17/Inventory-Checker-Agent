@@ -6,3 +6,5 @@ data/
 .env
 *.egg-info/
 *.pem
+dist/
+build/

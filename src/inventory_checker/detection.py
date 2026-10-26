@@ -1,29 +1,31 @@
-"""Object detection and population match with a Microsoft Agent Framework agent on Claude Haiku 5.5.
+"""Object detection and population matching with a Microsoft Agent Framework agent.
 
 The phone films the location and, every few seconds, sends a short segment of video frames in one
-request. Claude lists the distinct objects in the segment, counts each physical item once even when
-it shows up in several frames, and maps it to a SKU in the client population when it is the same
-kind of item. Mappings are checked against the population in code, so an invented SKU never reaches
-the assessment.
+request. The model lists the distinct objects in the segment, counts each physical item once even when
+it shows up in several frames, and maps it to a SKU in the client population when it is the same kind
+of item. Mappings are checked against the population in code, so an invented SKU never reaches the
+assessment.
 
-Cost controls: the cheapest current Claude model, effort ``low``, a small output cap, frames
-downscaled on the phone, and one call per segment rather than per frame.
+The agent works with any MAF chat client (see :mod:`inventory_checker.providers`). The answer format is
+one strict JSON schema that both Anthropic's and OpenAI's structured outputs accept: every property
+required, ``additionalProperties: false``, and no numeric limits (ranges are enforced here instead).
+
+To plug in a different detector (for example a local vision model), point ``DETECTOR`` at an async
+callable with the signature of :data:`Detector`.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-import anthropic
 from agent_framework import Agent, Content, Message
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .population import Item
 
-DEFAULT_MODEL = "claude-haiku-5-5"
 MAX_FRAMES = 6
 
 INSTRUCTIONS = """You help an auditor count inventory. You receive frames from a short video the auditor
@@ -35,10 +37,10 @@ filmed at one location (or a single photo), plus the client's inventory populati
   say so in `notes`.
 - Ignore people, walls, floors and fixed furniture you are not asked about, and anything too small or
   blurred to identify.
-- Copy any readable label, brand or code into `visible_text`.
+- Copy any readable label, brand or code into `visible_text` (null if none).
 - Set `matched_sku` to the SKU of the population item that is the same kind of object, or null if none
   fits. Match on what the object is, not on colour or brand. Never invent a SKU.
-- `confidence` is your confidence in the identification and the count, 0 to 1."""
+- `confidence` is your confidence in the identification and the count, from 0 to 1."""
 
 
 class DetectedObject(BaseModel):
@@ -49,6 +51,16 @@ class DetectedObject(BaseModel):
     matched_sku: str | None = None
     notes: str = ""
 
+    @field_validator("count", mode="before")
+    @classmethod
+    def _non_negative(cls, v: Any) -> Any:
+        return max(0, int(v)) if isinstance(v, (int, float)) else v
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _unit_interval(cls, v: Any) -> Any:
+        return min(1.0, max(0.0, float(v))) if isinstance(v, (int, float)) else v
+
 
 class SceneResult(BaseModel):
     objects: list[DetectedObject] = Field(default_factory=list)
@@ -56,48 +68,45 @@ class SceneResult(BaseModel):
     notes: str = ""
 
 
-def response_schema() -> dict[str, Any]:
-    """SceneResult as a schema Claude's structured outputs accept.
+Detector = Callable[[list[tuple[bytes, str]], list[Item]], Awaitable[SceneResult]]
 
-    The API rejects numeric limits (``minimum``/``maximum``) and needs ``additionalProperties: false`` on
-    every object. The MAF connector sends a Pydantic schema as-is, so the Anthropic SDK's
-    ``transform_schema`` cleans it first; the limits are enforced when the answer is parsed below.
-    """
-    return {"schema": anthropic.transform_schema(SceneResult)}
+_NULLABLE_STRING = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["objects", "image_quality", "notes"],
+    "properties": {
+        "objects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "count", "confidence", "visible_text", "matched_sku", "notes"],
+                "properties": {
+                    "name": {"type": "string", "description": "What the object is, e.g. 'coffee mug'"},
+                    "count": {"type": "integer", "description": "Number of physical items, 0 or more"},
+                    "confidence": {"type": "number", "description": "0 to 1"},
+                    "visible_text": {**_NULLABLE_STRING, "description": "Readable label, brand or code"},
+                    "matched_sku": {**_NULLABLE_STRING, "description": "SKU from the population, or null"},
+                    "notes": {"type": "string"},
+                },
+            },
+        },
+        "image_quality": {"type": "string", "enum": ["good", "usable", "poor"]},
+        "notes": {"type": "string"},
+    },
+}
+
+# OpenAI-style envelope; MAF's Anthropic and OpenAI clients both read it.
+RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {"name": "scene_result", "schema": RESPONSE_SCHEMA, "strict": True},
+}
 
 
-def model_name() -> str:
-    return os.getenv("CLAUDE_MODEL", DEFAULT_MODEL)
-
-
-def _client_class() -> type:
-    from agent_framework_anthropic import AnthropicClient
-
-    class HaikuClient(AnthropicClient):
-        """Anthropic client with this app's request defaults."""
-
-        def _prepare_options(self, messages: Sequence[Any], options: Mapping[str, Any], request_state: Any = None,
-                             /, **kwargs: Any) -> dict[str, Any]:
-            opts = dict(options)
-            if not opts.get("max_tokens"):
-                opts["max_tokens"] = int(os.getenv("CLAUDE_MAX_TOKENS", "4000"))
-            output_config = dict(opts.get("output_config") or {})
-            output_config.setdefault("effort", os.getenv("CLAUDE_EFFORT", "low"))
-            opts["output_config"] = output_config
-            return super()._prepare_options(messages, opts, request_state, **kwargs)
-
-    return HaikuClient
-
-
-def build_client(*, api_key: str | None = None, base_url: str | None = None) -> Any | None:
-    """Claude client, or None when no ``ANTHROPIC_API_KEY`` is set."""
-    api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None
-    kwargs: dict[str, Any] = {"model": model_name(), "api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    return _client_class()(**kwargs)
+def _max_tokens() -> int:
+    return int(os.getenv("AI_MAX_TOKENS") or os.getenv("CLAUDE_MAX_TOKENS") or "4000")
 
 
 async def detect(client: Any, frames: list[tuple[bytes, str]], population: list[Item]) -> SceneResult:
@@ -114,7 +123,7 @@ async def detect(client: Any, frames: list[tuple[bytes, str]], population: list[
         Content.from_text(f"Client inventory population:\n{population_json}\n\n"
                           f"Identify, count and match the objects in {what}."),
     ])
-    response = await agent.run(message, options={"response_format": response_schema()})
+    response = await agent.run(message, options={"response_format": RESPONSE_FORMAT, "max_tokens": _max_tokens()})
     result = SceneResult.model_validate_json(response.text)
     valid = {i.sku for i in population}
     for obj in result.objects:
@@ -122,3 +131,16 @@ async def detect(client: Any, frames: list[tuple[bytes, str]], population: list[
             obj.notes = (obj.notes + f" (model suggested unknown SKU {obj.matched_sku})").strip()
             obj.matched_sku = None
     return result
+
+
+def load_custom_detector(spec: str) -> Detector:
+    """Load ``package.module:callable`` named by the ``DETECTOR`` setting."""
+    import importlib
+
+    module_name, _, attr = spec.partition(":")
+    if not module_name or not attr:
+        raise ValueError(f"DETECTOR must look like 'package.module:function', got {spec!r}")
+    fn = getattr(importlib.import_module(module_name), attr)
+    if not callable(fn):
+        raise TypeError(f"{spec} is not callable")
+    return fn
