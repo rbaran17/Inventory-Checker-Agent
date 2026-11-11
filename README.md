@@ -11,6 +11,13 @@ You can also plug in your own detector.
 [![CI](https://github.com/rbaran17/inventory-checker-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/rbaran17/inventory-checker-agent/actions/workflows/ci.yml)
 License: [MIT](LICENSE) · Status: proof of concept
 
+![Demo: load the listing, connect the phone, scan and match items, review exceptions, export the results](docs/assets/demo.gif)
+
+<sub>A full engagement run against <a href="examples/items_to_be_tested.csv"><code>examples/items_to_be_tested.csv</code></a>:
+the laptop matches serial and model numbers, flags a one-character serial misread and quantity differences, and
+lists an object that is not on the listing. The screenshots use a scripted <a href="docs/extending.md">plug-in
+detector</a> so the walkthrough can be reproduced without a camera or an API key.</sub>
+
 ---
 
 ## The workflow
@@ -28,6 +35,23 @@ The laptop app walks the auditor through five steps:
 The **Demo** tab runs the same workflow on twelve everyday home and office items, with data kept separate
 from the engagement. Edit the expected brand, model or serial number of something on your desk to see
 matches and exceptions.
+
+### Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/step1-listing.png" alt="Step 1: engagement details and the items to be tested listing"><br><sub><b>1. Items to be tested:</b> engagement details and the uploaded listing</sub></td>
+    <td width="50%"><img src="docs/assets/step2-connect-phone.png" alt="Step 2: QR code to connect the phone"><br><sub><b>2. Connect phone:</b> scan the QR code, no app needed</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/step3-scan-and-match.png" alt="Step 3: live detections matched to the listing"><br><sub><b>3. Scan &amp; match:</b> live detections, label values and listing progress</sub></td>
+    <td><img src="docs/assets/step4-review-exceptions.png" alt="Step 4: expected vs read values with Accept and Follow up"><br><sub><b>4. Review exceptions:</b> expected vs read, with Accept / Follow up and a note</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/step5-summary.png" alt="Step 5: KPIs, results table and Excel/CSV export"><br><sub><b>5. Summary &amp; export:</b> KPIs, results and Excel / CSV downloads</sub></td>
+    <td align="center"><img src="docs/assets/phone-camera.png" width="200" alt="Phone camera page"><br><sub><b>Phone:</b> the camera page opened from the QR code</sub></td>
+  </tr>
+</table>
 
 ```
  Phone  (/scan)                          Laptop  (/)
