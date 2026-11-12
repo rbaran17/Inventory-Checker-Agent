@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -40,7 +41,8 @@ def test_access_key_required():
     c = authed()
     assert "Inventory Count" in c.get("/").text and "Count Camera" in c.get("/scan").text
     qr = c.get("/api/qr").json()
-    assert qr["url"] == f"https://tunnel.example/scan?key={KEY}" and "<svg" in qr["svg"]
+    assert qr["url"].startswith("https://tunnel.example/scan?key=") and "<svg" in qr["svg"]
+    assert KEY not in qr["url"]  # the phone link carries a derived key, never the access key
     assert c.get("/healthz").json()["status"] == "ok"
 
 
@@ -84,9 +86,9 @@ def test_engagement_workflow_end_to_end():
 
     s = c.post("/api/items/A-2/review", json={"decision": "follow_up", "note": "Model label differs"}).json()
     assert s["assessment"]["summary"]["reviewed"] == 1
-    s = c.post("/api/scans/S001/objects/2", json={"item_id": "B-1"}).json()  # auditor fixes a match
+    s = c.post("/api/scans/S001/objects/3", json={"item_id": "B-1"}).json()  # auditor fixes a match
     assert s["scans"][0]["objects"][2]["mapped_by"] == "you"
-    assert c.post("/api/scans/S001/objects/2", json={"item_id": "NOPE"}).status_code == 400
+    assert c.post("/api/scans/S001/objects/3", json={"item_id": "NOPE"}).status_code == 400
 
     csv_text = c.get("/api/export.csv").text
     assert csv_text.startswith("Item ID,Description") and "Model label differs" in csv_text
@@ -140,7 +142,9 @@ def test_access_key_survives_restarts(monkeypatch, tmp_path):
     monkeypatch.delenv("APP_ACCESS_KEY", raising=False)
     monkeypatch.setenv("APP_ACCESS_KEY_FILE", str(tmp_path / "key"))
     first = load_or_create_access_key()
-    assert load_or_create_access_key() == first and (tmp_path / "key").stat().st_mode & 0o777 == 0o600
+    assert load_or_create_access_key() == first and len(first) >= 24
+    if os.name == "posix":  # Windows has no owner-only mode bits; the profile folder's ACL protects the file
+        assert (tmp_path / "key").stat().st_mode & 0o777 == 0o600
     monkeypatch.setenv("APP_ACCESS_KEY", "fixed")
     assert load_or_create_access_key() == "fixed"
 
@@ -156,7 +160,7 @@ def test_phone_results_view_and_removal():
     c.post("/api/scans", files=frames(4))
     v = c.get("/api/phone/scans").json()
     assert v["workspace"] == "demo" and [s["id"] for s in v["scans"]] == ["S001", "S002"] and v["summary"]["total"] == 12
-    v = c.delete("/api/scans/S002/objects/1").json()  # drop the background object only
+    v = c.delete("/api/scans/S002/objects/2").json()  # drop the background object only
     assert [o["name"] for o in v["scans"][1]["objects"]] == ["mug"]
     assert c.delete("/api/scans/S002/objects/5").status_code == 404
     c.delete("/api/scans/S001")

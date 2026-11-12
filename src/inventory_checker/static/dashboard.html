@@ -94,7 +94,7 @@
 </style>
 </head>
 <body>
-<div id="keyBanner">This page lost its access key (the server was restarted with a new one). Open the “Open on the laptop” link printed in the terminal, then reconnect the phone.</div>
+<div id="keyBanner">This page lost its access key (it expired, or the server was restarted with a new one). Open the “Open on the laptop” link printed in the terminal, then reconnect the phone.</div>
 <header>
   <div class="bar">
     <div class="brand"><span class="logo">▦</span>Inventory Count</div>
@@ -236,9 +236,9 @@
       <div class="frames">${Array.from({ length: sc.frames }, (_, i) => `<a href="/api/scans/${sc.id}/frames/${i}" target="_blank"><img loading="lazy" src="/api/scans/${sc.id}/frames/${i}" alt=""></a>`).join("")}</div>
       ${sc.notes ? `<div class="small muted" style="padding:6px 12px 0">${esc(sc.notes)}</div>` : ""}
       <table><thead><tr><th>Object</th><th class="num">Qty</th><th>Read from label</th><th>Matched to</th></tr></thead><tbody>
-      ${sc.objects.map((o, i) => `<tr><td><b>${esc(o.name)}</b><div class="small muted">${Math.round(o.confidence * 100)}% confidence${o.notes ? " · " + esc(o.notes) : ""}</div></td><td class="num">${o.count}</td>
+      ${sc.objects.map((o) => `<tr><td><b>${esc(o.name)}</b><div class="small muted">${Math.round(o.confidence * 100)}% confidence${o.notes ? " · " + esc(o.notes) : ""}</div></td><td class="num">${o.count}</td>
         <td><div class="attrs">${(o.attributes || []).map(a => `<span class="attr">${esc(a.name)}: ${esc(a.value)}</span>`).join("") || '<span class="muted small">—</span>'}</div></td>
-        <td><select data-scan="${sc.id}" data-i="${i}" style="max-width:240px">${itemOptions(s, o.item_id)}</select><div class="small muted">${esc(BASIS(o))}</div></td></tr>`).join("") || '<tr><td colspan="4" class="muted">Nothing identified in this scan.</td></tr>'}
+        <td><select data-scan="${sc.id}" data-obj="${esc(o.id)}" style="max-width:240px">${itemOptions(s, o.item_id)}</select><div class="small muted">${esc(BASIS(o))}</div></td></tr>`).join("") || '<tr><td colspan="4" class="muted">Nothing identified in this scan.</td></tr>'}
       </tbody></table></div>`;
   }
   function stepScan(s) {
@@ -320,7 +320,7 @@
     if ($("resetDemo")) $("resetDemo").onclick = async () => { if (confirm("Reset the demo listing and remove demo scans?")) render(await api("/api/demo/reset", { method: "POST" }), true); };
     P.querySelectorAll("input[data-attr]").forEach(inp => inp.onchange = async () => { try { render(await api(`/api/demo/items/${encodeURIComponent(inp.dataset.item)}`, { json: { attributes: { [inp.dataset.attr]: inp.value } } }), true); toast("Saved"); } catch (e) { toast(e.message); } });
     P.querySelectorAll("input[data-qty]").forEach(inp => inp.onchange = async () => { try { render(await api(`/api/demo/items/${encodeURIComponent(inp.dataset.qty)}`, { json: { expected_qty: Number(inp.value) } }), true); toast("Saved"); } catch (e) { toast(e.message); } });
-    P.querySelectorAll("select[data-scan]").forEach(sel => sel.onchange = async () => { try { render(await api(`/api/scans/${sel.dataset.scan}/objects/${sel.dataset.i}`, { json: { item_id: sel.value || null } }), true); } catch (e) { toast(e.message); } });
+    P.querySelectorAll("select[data-scan]").forEach(sel => sel.onchange = async () => { try { render(await api(`/api/scans/${sel.dataset.scan}/objects/${encodeURIComponent(sel.dataset.obj)}`, { json: { item_id: sel.value || null } }), true); } catch (e) { toast(e.message); } });
     P.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => render(await api(`/api/scans/${b.dataset.del}`, { method: "DELETE" }), true));
     if ($("clearScans")) $("clearScans").onclick = async () => { if (confirm("Remove all scans and reviews in this tab?")) render(await api("/api/scans", { method: "DELETE" }), true); };
     const saveReview = async (item, decision) => { const note = P.querySelector(`input[data-note="${CSS.escape(item)}"]`)?.value || "";

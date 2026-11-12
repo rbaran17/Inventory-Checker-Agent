@@ -259,13 +259,13 @@
       if ($("sheet").classList.contains("show")) renderSheet();
     } catch (e) { /* ping reports connection problems */ }
   }
-  function objectRow(scanId, o, i) {
+  function objectRow(scanId, o) {
     const tag = o.item_id ? `<span class="tag ok">${esc(o.item_id)}</span>` : `<span class="tag">Not on listing</span>`;
     const attrs = (o.attributes || []).map(a => `<div class="attr">${esc(a.name)}: ${esc(a.value)}</div>`).join("");
     const basis = o.match_basis && !["description", "none", "auditor"].includes(o.match_basis) ? " · matched by " + esc(o.match_basis) : "";
     return `<div class="obj"><div style="flex:1;min-width:0"><div class="name">${esc(o.name)} <span class="sub">× ${o.count}</span></div>${attrs}
       <div class="sub">${Math.round(o.confidence * 100)}% sure${basis}</div></div>
-      <div style="display:flex;align-items:center;gap:4px">${tag}<button class="x" data-rmobj="${scanId}:${i}" aria-label="Remove this item">✕</button></div></div>`;
+      <div style="display:flex;align-items:center;gap:4px">${tag}<button class="x" data-rmobj="${scanId}:${esc(o.id)}" aria-label="Remove this item">✕</button></div></div>`;
   }
 
   // ------------------------------------------------------------------ latest-result card
@@ -274,7 +274,7 @@
     const n = scan.objects.length;
     $("result").innerHTML = `<div class="rhead"><div><b>${n ? `${n} item${n === 1 ? "" : "s"} found` : "Nothing identified"}</b> <small>${esc(scan.id)} · ${scan.kind === "photo" ? "close-up" : "scan"}</small></div>
       <div style="display:flex;gap:6px;align-items:center"><button class="tbtn danger" data-rmscan="${scan.id}" data-label="Remove">Remove</button><button class="x" id="hideCard" aria-label="Close">✕</button></div></div>
-      ${scan.objects.map((o, i) => objectRow(scan.id, o, i)).join("") || `<div class="sub">${esc(scan.notes || "Try moving closer or improving the light.")}</div>`}`;
+      ${scan.objects.map((o) => objectRow(scan.id, o)).join("") || `<div class="sub">${esc(scan.notes || "Try moving closer or improving the light.")}</div>`}`;
     $("result").classList.add("show");
     bindRemovals($("result"));
     $("hideCard").onclick = hideCard;
@@ -291,7 +291,7 @@
       <div class="meta"><img src="/api/scans/${sc.id}/frames/0" alt="" loading="lazy"><div><b>${esc(sc.id)} · ${sc.kind === "photo" ? "Close-up" : "Scan"}</b>
         <span class="sub">${esc(sc.taken_at)} · ${sc.objects.length} item${sc.objects.length === 1 ? "" : "s"}</span></div>
         <button class="tbtn danger" data-rmscan="${sc.id}" data-label="Delete">Delete</button></div>
-      ${sc.objects.map((o, i) => objectRow(sc.id, o, i)).join("")}</div>`).join("")
+      ${sc.objects.map((o) => objectRow(sc.id, o)).join("")}</div>`).join("")
       : `<div class="empty">No results yet.<br>Scans you take appear here.</div>`;
     bindRemovals($("list"));
   }
@@ -314,9 +314,9 @@
       catch (e) { toast(e.message); }
     });
     root.querySelectorAll("[data-rmobj]").forEach(b => b.onclick = async () => {
-      const [scanId, i] = b.dataset.rmobj.split(":");
+      const [scanId, objId] = b.dataset.rmobj.split(":");
       try {
-        view = await api(`/api/scans/${scanId}/objects/${i}`, { method: "DELETE" }); buzz(10);
+        view = await api(`/api/scans/${scanId}/objects/${encodeURIComponent(objId)}`, { method: "DELETE" }); buzz(10);
         const sc = view.scans.find(s => s.id === scanId);
         if (cardScan === scanId && sc) showCard(sc);
         await loadScans();

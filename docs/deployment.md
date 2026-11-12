@@ -85,4 +85,8 @@ The CA is only used for `pip` during the build and is not stored in the image.
 | `SAMPLE_FILE` | – | Items to be tested listing (CSV or .xlsx) loaded into the Engagement tab at startup |
 | `HOST`, `PORT` | `127.0.0.1`, `8000` (`0.0.0.0` in Docker) | Listen address |
 | `LAPTOP_URL` | `http://localhost:<port>` | Base of the printed laptop link |
-| `MAX_UPLOAD_BYTES` | 15 MB | Upload limit per scan |
+| `MAX_UPLOAD_BYTES` | 15 MB | Upload limit per scan or listing; larger requests are refused unread |
+| `MAX_SCANS_PER_MINUTE`, `MAX_CONCURRENT_SCANS` | `30`, `2` | Caps on model calls |
+
+Run `inventory-checker rotate-key` (in Docker: `docker compose run --rm app inventory-checker rotate-key`) to
+replace the saved access key, then restart.

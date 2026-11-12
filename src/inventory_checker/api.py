@@ -12,11 +12,12 @@ phone scans go to whichever is active on the laptop. State is in memory: restart
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
-import secrets
 import time
+from collections import deque
 from importlib import resources
 from typing import Any, Literal
 from urllib.parse import quote
@@ -26,8 +27,9 @@ import qrcode.image.svg
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
-from . import detection, export, providers
+from . import detection, export, providers, security
 from .config import Settings
 from .sample import TEMPLATE_CSV, Sample, assess, demo_sample, parse_sample, reconcile
 
@@ -37,6 +39,8 @@ Detector = detection.Detector
 
 ALLOWED_IMAGES = {"image/jpeg", "image/png", "image/webp"}
 PHONE_TIMEOUT_SECONDS = 20
+BODY_OVERHEAD_BYTES = 1024 * 1024     # multipart boundaries and headers on top of MAX_UPLOAD_BYTES
+KEY_ATTEMPTS, KEY_ATTEMPT_WINDOW = 10, 300   # wrong keys allowed per client address, per 5 minutes
 WORKSPACES = ("engagement", "demo")
 
 
@@ -81,8 +85,7 @@ def _detector_from_env() -> tuple[Detector | None, str | None]:
 
 
 def _new_workspace(sample: Sample | None = None) -> dict[str, Any]:
-    return {"sample": sample, "details": DetailsIn().model_dump(), "scans": [], "images": {}, "reviews": {},
-            "next_scan": 1}
+    return {"sample": sample, "details": DetailsIn().model_dump(), "scans": [], "images": {}, "reviews": {}}
 
 
 def create_app(settings: Settings | None = None, *, detector: Detector | None = None,
@@ -98,7 +101,16 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         "active": "engagement",
         "ws": {"engagement": _new_workspace(), "demo": _new_workspace(demo_sample())},
         "phone_seen": None, "phone_agent": "",
+        # Scan IDs are unique across both tabs and never reused, so an ID always means the same scan.
+        "next_scan": 1,
     }
+    security.install_log_redaction()
+    laptop_cookie = security.derive(settings.access_key, "laptop-session")
+    phone_key = security.derive(settings.access_key, "phone-link")
+    phone_cookie = security.derive(settings.access_key, "phone-session")
+    key_attempts = security.AttemptLimiter(KEY_ATTEMPTS, KEY_ATTEMPT_WINDOW)
+    scan_times: deque[float] = deque()
+    scans_in_flight = 0
     if use_env_client and (path := os.getenv("SAMPLE_FILE")):
         with open(path, "rb") as fh:
             state["ws"]["engagement"]["sample"] = parse_sample(fh.read(), os.path.basename(path))
@@ -111,25 +123,74 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         return state["ws"][name or state["active"]]
 
     # ------------------------------------------------------------------ access key
+    def _denied(request: Request, status: int, message: str, **kw: Any) -> Response:
+        if request.url.path.startswith("/api"):
+            return JSONResponse({"detail": message}, status, **kw)
+        return HTMLResponse(f"<p style='font:16px system-ui;padding:24px'>{message}</p>", status, **kw)
+
+    def _body_problem(request: Request) -> Response | None:
+        """Refuse an oversized body before it is read; uploads are otherwise spooled in full before any check."""
+        if request.method not in ("POST", "PUT", "PATCH"):
+            return None
+        if "transfer-encoding" in request.headers:
+            return _denied(request, 411, "Send a Content-Length header")
+        try:
+            length = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            return _denied(request, 400, "Invalid Content-Length header")
+        if length < 0 or length > settings.max_upload_bytes + BODY_OVERHEAD_BYTES:
+            return _denied(request, 413, "Request too large")
+        return None
+
     @app.middleware("http")
     async def require_key(request: Request, call_next):
-        if request.url.path == "/healthz":  # container health checks carry no key
+        path = request.url.path
+        if path == "/healthz":  # container health checks carry no key
             return await call_next(request)
+        if (problem := _body_problem(request)) is not None:
+            return problem
+
+        role = None
         key = request.query_params.get("key")
-        if key and secrets.compare_digest(key, settings.access_key):
-            if request.method == "GET" and not request.url.path.startswith("/api"):
-                resp = RedirectResponse(request.url.path)  # drop the key from the address bar
+        caller = request.client.host if request.client else "unknown"
+        if key:
+            if key_attempts.blocked(caller):
+                return _denied(request, 429, "Too many wrong access keys from this address. Wait a few minutes.",
+                               headers={"Retry-After": str(KEY_ATTEMPT_WINDOW)})
+            if security.same(key, settings.access_key):
+                role = "laptop"
+            elif security.same(key, phone_key):
+                role = "phone"
+            else:
+                key_attempts.record(caller)
+            if role and request.method == "GET" and not path.startswith("/api"):
+                # Drop the key from the address bar and keep a derived session cookie instead.
+                resp = RedirectResponse(path if role == "laptop" else "/scan")
                 https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-                resp.set_cookie("ic_key", key, httponly=True, samesite="lax", secure=https, max_age=7 * 86400)
+                name, value = ((security.LAPTOP_COOKIE, laptop_cookie) if role == "laptop"
+                               else (security.PHONE_COOKIE, phone_cookie))
+                resp.set_cookie(name, value, httponly=True, samesite="lax", secure=https,
+                                max_age=security.COOKIE_MAX_AGE)
                 return resp
-            return await call_next(request)
-        cookie = request.cookies.get("ic_key", "")
-        if cookie and secrets.compare_digest(cookie, settings.access_key):
-            return await call_next(request)
-        if request.url.path.startswith("/api"):
-            return JSONResponse({"detail": "Open the link printed in the terminal, or scan the QR code"}, 401)
-        return HTMLResponse("<p style='font:16px system-ui;padding:24px'>Open the link printed in the terminal "
-                            "(it includes the access key), or scan the QR code on the laptop.</p>", 401)
+        if role is None:
+            if security.same(request.cookies.get(security.LAPTOP_COOKIE, ""), laptop_cookie):
+                role = "laptop"
+            elif security.same(request.cookies.get(security.PHONE_COOKIE, ""), phone_cookie):
+                role = "phone"
+        if role is None:
+            if path == "/scan" or request.cookies.get(security.PHONE_COOKIE):
+                message = "Scan the QR code on the laptop to connect this phone."
+            else:
+                message = ("Open the link printed in the terminal (it includes the access key), "
+                           "or scan the QR code on the laptop.")
+            resp = _denied(request, 401, message)
+            for name in (security.LAPTOP_COOKIE, security.PHONE_COOKIE, "ic_key"):  # drop stale sessions
+                if name in request.cookies:
+                    resp.delete_cookie(name)
+            return resp
+        if role == "phone" and not security.phone_may(request.method, path):
+            return _denied(request, 403, "The phone link can only scan. Use the laptop link for this.")
+        return await call_next(request)
 
     # ------------------------------------------------------------------ pages
     def _page(name: str) -> HTMLResponse:
@@ -182,7 +243,7 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
     def qr(request: Request):
         public = settings.resolve_public_url()
         base = public or str(request.base_url).rstrip("/")
-        url = f"{base}/scan?key={quote(settings.access_key)}"
+        url = f"{base}/scan?key={quote(phone_key)}"
         img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=8)
         buf = io.BytesIO()
         img.save(buf)
@@ -213,11 +274,12 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         if len(data) > settings.max_upload_bytes:
             raise HTTPException(413, "File too large")
         try:
-            sample = parse_sample(data, file.filename or "sample.csv")
+            # Parsing a large workbook is slow: keep it off the event loop so scans and pages stay responsive.
+            sample = await run_in_threadpool(parse_sample, data, file.filename or "sample.csv")
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         w = ws("engagement")
-        w.update(sample=sample, scans=[], images={}, reviews={}, next_scan=1)
+        w.update(sample=sample, scans=[], images={}, reviews={})
         state["active"] = "engagement"
         return _snapshot()
 
@@ -263,8 +325,10 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         if detector is None:
             raise HTTPException(503, "No AI provider is configured: set ANTHROPIC_API_KEY, or the Azure OpenAI / "
                                      "OpenAI settings (see README), and restart the server")
+        nonlocal scans_in_flight
         w, workspace = ws(), state["active"]
-        if w["sample"] is None:
+        sample = w["sample"]
+        if sample is None:
             raise HTTPException(409, "Upload the items to be tested listing on the laptop first (or switch to the Demo tab)")
         if not 1 <= len(frames) <= detection.MAX_FRAMES:
             raise HTTPException(400, f"Send 1 to {detection.MAX_FRAMES} frames")
@@ -279,65 +343,93 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
             if total > settings.max_upload_bytes:
                 raise HTTPException(413, "Frames too large")
             images.append((data, media_type))
+        # Every scan is a paid model call: cap how many run at once and per minute.
+        now = time.monotonic()
+        while scan_times and now - scan_times[0] > 60:
+            scan_times.popleft()
+        if scans_in_flight >= settings.max_concurrent_scans:
+            raise HTTPException(429, "The previous scan is still being analysed", headers={"Retry-After": "3"})
+        if len(scan_times) >= settings.max_scans_per_minute:
+            raise HTTPException(429, "Too many scans in the last minute. Pause for a moment.",
+                                headers={"Retry-After": "20"})
+        scan_times.append(now)
         state["phone_seen"] = time.time()
         started = time.time()
+        scans_in_flight += 1
         try:
-            result = await detector(images, w["sample"])
+            result = await detector(images, sample)
         except Exception as exc:  # report model/API errors to the phone and the server log
             log.exception("Detection failed")
             raise HTTPException(502, f"Detection failed: {exc}") from exc
-        scan_id = f"S{w['next_scan']:03d}"
-        w["next_scan"] += 1
+        finally:
+            scans_in_flight -= 1
+        if state["ws"][workspace] is not w or w["sample"] is not sample:
+            raise HTTPException(409, "The listing changed while this scan was being analysed. Scan again.")
+        scan_id = f"S{state['next_scan']:03d}"
+        state["next_scan"] += 1
         objects = []
-        for o in result.objects:
-            obj = {**o.model_dump(), "suggested_item_id": o.matched_item_id, "mapped_by": "ai"}
+        for n, o in enumerate(result.objects, start=1):
+            # "id" stays with the object for its lifetime; positions shift when another object is removed.
+            obj = {"id": str(n), **o.model_dump(), "suggested_item_id": o.matched_item_id, "mapped_by": "ai"}
             obj["item_id"], obj["match_basis"] = reconcile(w["sample"], obj)
             objects.append(obj)
         scan = {"id": scan_id, "taken_at": time.strftime("%H:%M:%S"), "seconds": round(time.time() - started, 1),
                 "frames": len(images), "kind": "photo" if len(images) == 1 else "video",
                 "image_quality": result.image_quality, "notes": result.notes, "objects": objects}
         w["scans"].append(scan)
-        w["images"][scan_id] = images
+        w["images"][scan_id] = [(data, media_type, hashlib.sha256(data).hexdigest()[:32])
+                                for data, media_type in images]
         return {"workspace": workspace, "scan": scan, "summary": _assessment(w)["summary"]}
 
-    def _scan(scan_id: str) -> dict[str, Any]:
-        scan = next((s for s in ws()["scans"] if s["id"] == scan_id), None)
-        if scan is None:
-            raise HTTPException(404, "Scan not found")
-        return scan
+    def _scan(scan_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """(workspace, scan) for an ID, whichever tab it belongs to: the laptop may have switched tabs since
+        the phone or page that is asking last refreshed."""
+        for w in state["ws"].values():
+            for scan in w["scans"]:
+                if scan["id"] == scan_id:
+                    return w, scan
+        raise HTTPException(404, "Scan not found")
+
+    def _object_index(scan: dict[str, Any], object_id: str) -> int:
+        for i, obj in enumerate(scan["objects"]):
+            if obj["id"] == object_id:
+                return i
+        raise HTTPException(404, "Object not found")
 
     @app.get("/api/scans/{scan_id}/frames/{index}")
-    def scan_frame(scan_id: str, index: int):
-        frames = ws()["images"].get(scan_id)
+    def scan_frame(scan_id: str, index: int, request: Request):
+        w, _ = _scan(scan_id)
+        frames = w["images"].get(scan_id)
         if not frames or not 0 <= index < len(frames):
             raise HTTPException(404, "Frame not found")
-        data, media_type = frames[index]
-        return Response(data, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+        data, media_type, digest = frames[index]
+        # Revalidate on every use: a scan ID can mean a different scan after the server restarts.
+        headers = {"Cache-Control": "private, no-cache", "ETag": f'"{digest}"'}
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
+        return Response(data, media_type=media_type, headers=headers)
 
-    @app.post("/api/scans/{scan_id}/objects/{index}")
-    def remap(scan_id: str, index: int, body: MappingIn):
-        scan = _scan(scan_id)
-        if not 0 <= index < len(scan["objects"]):
-            raise HTTPException(404, "Object not found")
-        if body.item_id is not None and not ws()["sample"].item(body.item_id):
+    @app.post("/api/scans/{scan_id}/objects/{object_id}")
+    def remap(scan_id: str, object_id: str, body: MappingIn):
+        w, scan = _scan(scan_id)
+        index = _object_index(scan, object_id)
+        if body.item_id is not None and not w["sample"].item(body.item_id):
             raise HTTPException(400, f"Unknown item {body.item_id}")
         scan["objects"][index].update(item_id=body.item_id, match_basis="auditor", mapped_by="you")
         return _snapshot()
 
     @app.delete("/api/scans/{scan_id}")
     def delete_scan(scan_id: str):
-        w = ws()
-        w["scans"] = [s for s in w["scans"] if s["id"] != scan_id]
-        w["images"].pop(scan_id, None)
+        for w in state["ws"].values():
+            w["scans"] = [s for s in w["scans"] if s["id"] != scan_id]
+            w["images"].pop(scan_id, None)
         return _snapshot()
 
-    @app.delete("/api/scans/{scan_id}/objects/{index}")
-    def delete_object(scan_id: str, index: int):
+    @app.delete("/api/scans/{scan_id}/objects/{object_id}")
+    def delete_object(scan_id: str, object_id: str):
         """Remove one detected object (e.g. something in the background) and keep the rest of the scan."""
-        scan = _scan(scan_id)
-        if not 0 <= index < len(scan["objects"]):
-            raise HTTPException(404, "Object not found")
-        scan["objects"].pop(index)
+        _, scan = _scan(scan_id)
+        scan["objects"].pop(_object_index(scan, object_id))
         return _phone_view()
 
     def _phone_view() -> dict[str, Any]:

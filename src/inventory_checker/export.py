@@ -15,6 +15,17 @@ RESULT_LABEL = {"match": "Match", "near_match": "Near match - check", "mismatch"
                 "recorded": "Recorded", "n/a": ""}
 DECISION_LABEL = {"accepted": "Accepted", "follow_up": "Follow up", None: ""}
 
+# Label text, object names, notes and listing cells come from the audited party or the model. A spreadsheet
+# treats a cell starting with one of these as a formula, so such text is never written as-is.
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def csv_safe(value: Any) -> Any:
+    """Text that a spreadsheet would run as a formula gets a leading apostrophe; other values pass through."""
+    if isinstance(value, str) and value.startswith(_FORMULA_START):
+        return "'" + value
+    return value
+
 
 def filename(workspace: str, details: dict[str, Any]) -> str:
     base = details.get("client") or ("demo" if workspace == "demo" else "inventory-count")
@@ -44,7 +55,7 @@ def results_csv(sample: Sample, assessment: dict[str, Any]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(header)
-    w.writerows([["" if v is None else v for v in row] for row in rows])
+    w.writerows([["" if v is None else csv_safe(v) for v in row] for row in rows])
     return buf.getvalue()
 
 
@@ -107,6 +118,13 @@ def results_xlsx(sample: Sample, assessment: dict[str, Any], details: dict[str, 
     table(wb.create_sheet("Not on listing"), ["Scan", "Object", "Count", "Attributes read"],
           [[x["scan_id"], x["name"], x["count"], "; ".join(f"{a['name']}: {a['value']}" for a in x["attributes"])]
            for x in assessment["not_in_sample"]])
+    # The workbook has no formulas of its own: anything openpyxl took for one is text from a label or the
+    # listing (e.g. "=HYPERLINK(...)"), so store it as plain text.
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

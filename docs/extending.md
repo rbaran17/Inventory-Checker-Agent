@@ -101,8 +101,15 @@ provider-neutral: every property required, `additionalProperties: false`, and no
 
 ## HTTP API
 
-The laptop and phone pages use a small JSON API. Every request needs the access key, sent as the `ic_key`
-cookie or a `?key=` query parameter.
+The laptop and phone pages use a small JSON API. Every request needs a key, sent as a `?key=` query
+parameter or as the session cookie the server sets when a page is opened with `?key=`.
+
+- The **access key** (printed in the terminal) gives the laptop role, which can call everything.
+- The **phone key** (in the QR code, derived from the access key) gives the phone role, which can only call
+  the routes marked 📱 below. Other routes answer 403.
+
+Scan IDs (`S001`, ...) are unique across both tabs and are not reused. Each detected object has an `id` that
+stays the same when other objects are removed; use it, not the object's position.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -114,12 +121,13 @@ cookie or a `?key=` query parameter.
 | GET | `/api/sample-template.csv` | Template listing |
 | POST | `/api/demo/reset`, `/api/demo/items/{id}` | Reset the demo / edit a demo item's expected qty or attributes |
 | GET | `/api/qr` | QR code (SVG) and link for the phone |
-| POST | `/api/ping` | Phone heartbeat |
-| POST | `/api/scans` | multipart `frames` (1-6 JPEG/PNG/WebP): detect, read and match |
-| GET | `/api/phone/scans` | Scans and summary for the phone's Results sheet |
-| GET | `/api/scans/{id}/frames/{i}` | A stored frame |
-| POST | `/api/scans/{id}/objects/{i}` | `{"item_id": "..."\|null}` correct a match |
-| DELETE | `/api/scans/{id}/objects/{i}` | Remove one detected object |
-| DELETE | `/api/scans/{id}`, `/api/scans` | Remove one or all scans in the active tab |
+| POST | `/api/ping` | 📱 Phone heartbeat |
+| POST | `/api/scans` | 📱 multipart `frames` (1-6 JPEG/PNG/WebP): detect, read and match. 429 when over `MAX_SCANS_PER_MINUTE` or `MAX_CONCURRENT_SCANS` |
+| GET | `/api/phone/scans` | 📱 Scans and summary for the phone's Results sheet |
+| GET | `/api/scans/{id}/frames/{i}` | 📱 A stored frame |
+| POST | `/api/scans/{id}/objects/{object_id}` | `{"item_id": "..."\|null}` correct a match |
+| DELETE | `/api/scans/{id}/objects/{object_id}` | 📱 Remove one detected object |
+| DELETE | `/api/scans/{id}` | 📱 Remove one scan, in whichever tab it belongs to |
+| DELETE | `/api/scans` | Remove all scans in the active tab |
 | POST | `/api/items/{id}/review` | `{"decision": "accepted"\|"follow_up"\|null, "note"}` |
 | GET | `/api/export.xlsx`, `/api/export.csv` | Results for the working papers |

@@ -32,6 +32,7 @@ dependencies = [
     "pydantic>=2.7",
     "qrcode[pil]>=7.4",
     "openpyxl>=3.1",
+    "defusedxml>=0.7",   # openpyxl uses it, when installed, to parse uploaded workbooks safely
 ]
 
 [project.optional-dependencies]
