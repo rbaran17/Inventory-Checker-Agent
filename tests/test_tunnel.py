@@ -53,7 +53,7 @@ def test_qr_uses_discovered_tunnel_and_caches_it(metrics):
     assert r["public"] is False and "not HTTPS" in r["warning"]  # falls back to the laptop's address
     metrics["hostname"] = "calm-river-blue.trycloudflare.com"
     r = c.get("/api/qr").json()
-    assert r["url"] == "https://calm-river-blue.trycloudflare.com/scan?key=k" and r["warning"] is None
+    assert r["url"].startswith("https://calm-river-blue.trycloudflare.com/scan?key=") and r["warning"] is None
     metrics["hostname"] = ""
     assert c.get("/api/qr").json()["public"] is True  # cached
 

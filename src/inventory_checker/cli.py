@@ -22,7 +22,17 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
     s.add_argument("--certfile", help="TLS certificate (not needed behind an HTTPS tunnel)")
     s.add_argument("--keyfile")
+    sub.add_parser("rotate-key", help="Replace the saved access key (old links, QR codes and sessions stop working)")
     args = p.parse_args(argv)
+
+    if args.cmd == "rotate-key":
+        from .config import rotate_access_key
+
+        path = rotate_access_key()
+        print(f"New access key saved to {path}. Restart the server; it prints the new laptop link.")
+        if os.getenv("APP_ACCESS_KEY"):
+            print("Note: APP_ACCESS_KEY is set and takes precedence over the saved key. Change it there too.")
+        return
 
     import uvicorn
 
@@ -34,6 +44,8 @@ def main(argv: list[str] | None = None) -> None:
     ai = f"on ({app.state.ai_label})" if app.state.ai_ready else "OFF - configure an AI provider (see README)"
     local = os.getenv("LAPTOP_URL", f"http://localhost:{args.port}").rstrip("/")
     lines = [f"Open on the laptop:  {local}/?key={settings.access_key}", f"AI detection:        {ai}"]
+    if len(settings.access_key) < 16:
+        lines.append("WARNING: the access key is short and could be guessed. Use 16+ random characters.")
     if settings.public_base_url:
         lines += [f"Public address:      {settings.public_base_url}",
                   "The phone gets its link from the QR code on the laptop page."]

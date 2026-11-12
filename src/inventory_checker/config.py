@@ -24,11 +24,27 @@ def load_or_create_access_key() -> str:
             return key
     except FileNotFoundError:
         pass
-    key = secrets.token_urlsafe(9)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(key, encoding="utf-8")
-    path.chmod(0o600)
+    return _write_new_key(path)
+
+
+def _write_new_key(path: Path) -> str:
+    """Create the key file readable by its owner only from the first byte (no window with default permissions)."""
+    key = secrets.token_urlsafe(18)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + ".new")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(key)
+    os.replace(tmp, path)
     return key
+
+
+def rotate_access_key() -> Path:
+    """Replace the saved key. Every laptop link, QR code and open session made with the old key stops working."""
+    path = _key_file()
+    _write_new_key(path)
+    return path
 
 
 @dataclass
@@ -41,6 +57,9 @@ class Settings:
     # Keeps strangers who find the tunnel address from using the app (and your API credits).
     access_key: str = field(default_factory=load_or_create_access_key)
     max_upload_bytes: int = field(default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024))))
+    # Each scan is a paid model call. The phone sends about 15 a minute while recording, one at a time.
+    max_scans_per_minute: int = field(default_factory=lambda: int(os.getenv("MAX_SCANS_PER_MINUTE", "30")))
+    max_concurrent_scans: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_SCANS", "2")))
 
     def resolve_public_url(self) -> str | None:
         """Configured public address, or the quick tunnel's (cached once found)."""

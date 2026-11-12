@@ -198,7 +198,7 @@ The most used settings are below. The full table is in [docs/deployment.md](docs
 | `AI_PROVIDER` | auto | `anthropic`, `azure_openai`, `openai` or `none` |
 | `AI_MAX_TOKENS` | `4000` | Output cap per scan |
 | `PUBLIC_BASE_URL` | discovered from tunnel | HTTPS address the phone opens |
-| `APP_ACCESS_KEY` | generated once, then reused | Access key in the QR code and laptop link |
+| `APP_ACCESS_KEY` | generated once, then reused | Access key in the laptop link; the QR code carries a phone-only key derived from it |
 | `SAMPLE_FILE` | – | Items to be tested listing loaded into the Engagement tab at startup |
 | `DETECTOR` | – | Custom detector `module:function` |
 

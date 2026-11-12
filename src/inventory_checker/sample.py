@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import zipfile
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -61,14 +62,50 @@ class Sample(BaseModel):
 # ----------------------------------------------------------------------------- parsing
 
 
+# Limits on an uploaded listing. The file comes from the audited party, so it is parsed defensively: a small
+# file must not be able to use unbounded memory or CPU.
+MAX_ROWS = 5000                              # rows read, including the header and blank rows
+MAX_COLUMNS = 60
+MAX_CELL_CHARS = 500
+MAX_XLSX_UNPACKED_BYTES = 64 * 1024 * 1024   # total uncompressed size of the workbook's parts
+MAX_XLSX_PARTS = 2000
+
+def _too_many_rows() -> ValueError:
+    return ValueError(f"The listing has more than {MAX_ROWS} rows. Split it, or upload only the items to be tested.")
+
+
+def _check_xlsx_archive(data: bytes) -> None:
+    """Reject a workbook that unpacks to far more than its upload size (a zip bomb) before parsing it."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            parts = zf.infolist()
+    except zipfile.BadZipFile as exc:
+        raise ValueError("The file is not a valid Excel workbook (.xlsx)") from exc
+    if len(parts) > MAX_XLSX_PARTS or sum(p.file_size for p in parts) > MAX_XLSX_UNPACKED_BYTES:
+        raise ValueError("The Excel file is too large when unpacked. Save the listing as CSV and upload that.")
+
+
 def _rows_from_xlsx(data: bytes) -> list[list[Any]]:
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover - openpyxl is a dependency
         raise ValueError("Excel files need openpyxl installed") from exc
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    ws = wb.worksheets[0]
-    return [list(r) for r in ws.iter_rows(values_only=True)]
+    _check_xlsx_archive(data)
+    try:
+        # openpyxl parses the XML with defusedxml when it is installed (it is a dependency of this package),
+        # which blocks entity-expansion attacks.
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        rows: list[list[Any]] = []
+        for r in ws.iter_rows(values_only=True, max_col=MAX_COLUMNS):
+            if len(rows) >= MAX_ROWS:
+                raise _too_many_rows()
+            rows.append(list(r))
+        return rows
+    except ValueError:
+        raise
+    except Exception as exc:  # malformed or hostile workbook: report it, don't crash the request
+        raise ValueError("The Excel file could not be read. Save the listing as CSV and upload that.") from exc
 
 
 def _rows_from_csv(data: bytes) -> list[list[Any]]:
@@ -77,7 +114,15 @@ def _rows_from_csv(data: bytes) -> list[list[Any]]:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    return list(csv.reader(io.StringIO(text), dialect))
+    rows: list[list[Any]] = []
+    try:
+        for r in csv.reader(io.StringIO(text), dialect):
+            if len(rows) >= MAX_ROWS:
+                raise _too_many_rows()
+            rows.append(r[:MAX_COLUMNS])
+    except csv.Error as exc:
+        raise ValueError(f"The CSV file could not be read: {exc}") from exc
+    return rows
 
 
 def _cell(v: Any) -> str:
@@ -85,7 +130,7 @@ def _cell(v: Any) -> str:
         return ""
     if isinstance(v, float) and v.is_integer():
         v = int(v)
-    return str(v).strip()
+    return str(v).strip()[:MAX_CELL_CHARS]
 
 
 def parse_sample(data: bytes, filename: str = "sample.csv") -> Sample:
@@ -123,7 +168,7 @@ def parse_sample(data: bytes, filename: str = "sample.csv") -> Sample:
         qty_text = core.get("expected_qty", "")
         try:
             qty = int(float(qty_text.replace(",", ""))) if qty_text else 1
-        except ValueError as exc:
+        except (ValueError, OverflowError) as exc:  # OverflowError: "inf" or "1e999"
             raise ValueError(f"Row {line}: expected quantity '{qty_text}' is not a number") from exc
         items.append(SampleItem(item_id=item_id, description=core.get("description") or item_id,
                                 expected_qty=max(qty, 0), location=core.get("location", ""),
