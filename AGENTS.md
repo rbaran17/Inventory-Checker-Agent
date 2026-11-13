@@ -14,6 +14,33 @@ pytest -q                     # no API keys or network: providers are faked
 Run both before every commit. CI runs the same on Python 3.10–3.13, then builds the Docker image and
 smoke-tests it.
 
+On Windows: `.venv\Scripts\activate` instead of `source .venv/bin/activate`.
+
+## Running a count without a browser or phone
+
+If you are an agent asked to *use* this tool rather than change it, you need one command. Progress goes to
+stderr, results as JSON to stdout, and the exit code tells you what happened.
+
+```bash
+# 1. Check the installation and see the output shape. No API key, no cost, results are not real.
+inventory-checker check --listing examples/items_to_be_tested.csv docs/assets/phone-camera.png --offline --json -q
+
+# 2. See how many model calls a real run would make. No API key, no cost.
+inventory-checker check --listing LISTING.xlsx PHOTOS_OR_VIDEOS/ --dry-run
+
+# 3. Real run. Needs ANTHROPIC_API_KEY, or the Azure OpenAI / OpenAI settings (see .env.example).
+inventory-checker check --listing LISTING.xlsx PHOTOS_OR_VIDEOS/ --out results.xlsx --json -q --fail-on exception
+```
+
+- Exit `0` done, `1` `--fail-on` matched, `2` setup error or every scan failed. The reason is on stderr.
+- In the JSON, read `results.summary` for counts by status and `results.items[]` for each item's `status`,
+  `counted_qty`, `expected_qty` and `checks`. `errors[]` lists scans that failed.
+- Never present `--offline` output as a count: the stand-in does not look at the images.
+- Each photo and each 4-frame video segment is one paid model call. `--max-scans` (default 50) caps them.
+- To drive a count step by step (correct matches, record reviews), use the MCP server or the Python API.
+
+Full guide: [docs/headless.md](docs/headless.md).
+
 ## Layout
 
 | Path | What |

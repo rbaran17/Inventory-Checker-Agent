@@ -162,14 +162,54 @@ async def detect(client: Any, frames: list[tuple[bytes, str]], sample: Sample) -
     return result
 
 
+OFFLINE_LABEL = "offline stand-in (no model called; results are not real)"
+
+
+def new_offline_detector() -> Detector:
+    """A stand-in detector that calls no model: each scan "sees" the next listed item, at its expected quantity.
+
+    For trying the tool end to end without an API key and for wiring it into scripts and agents. It does not
+    look at the images, so its results say nothing about what is in them.
+    """
+    scans = 0
+
+    async def detect_offline(frames: list[tuple[bytes, str]], sample: Sample) -> SceneResult:
+        nonlocal scans
+        if not sample.items:
+            return SceneResult(notes="offline stand-in: empty listing")
+        item = sample.items[scans % len(sample.items)]
+        scans += 1
+        return SceneResult(
+            objects=[DetectedObject(name=item.description.lower(), count=item.expected_qty, confidence=0.5,
+                                    matched_item_id=item.item_id,
+                                    notes=f"offline stand-in, {len(frames)} frame(s) received, image not analysed")],
+            image_quality="usable", notes="offline stand-in: no model was called")
+
+    return detect_offline
+
+
 def load_custom_detector(spec: str) -> Detector:
-    """Load ``package.module:callable`` named by the ``DETECTOR`` setting."""
+    """Load ``package.module:callable`` named by the ``DETECTOR`` setting or ``--detector``.
+
+    The current folder is importable, as it is with ``python -m``, so a detector in a file next to where the
+    command runs (for example ``examples.custom_detector:detect`` from a clone) works with the installed command.
+    """
     import importlib
+    import sys
 
     module_name, _, attr = spec.partition(":")
     if not module_name or not attr:
-        raise ValueError(f"DETECTOR must look like 'package.module:function', got {spec!r}")
-    fn = getattr(importlib.import_module(module_name), attr)
+        raise ValueError(f"The detector must look like 'package.module:function', got {spec!r}")
+    cwd = os.getcwd()
+    if cwd not in sys.path and "" not in sys.path:
+        sys.path.insert(0, cwd)
+    try:
+        fn = getattr(importlib.import_module(module_name), attr)
+    except ImportError as exc:
+        raise ValueError(f"Detector {spec!r}: cannot import {module_name!r} ({exc}). Run from the folder that "
+                         "contains it, or install its package.") from exc
+    except AttributeError as exc:
+        raise ValueError(f"Detector {spec!r}: {module_name!r} has no {attr!r}") from exc
     if not callable(fn):
-        raise TypeError(f"{spec} is not callable")
+        raise TypeError(f"Detector {spec!r} is not a function")
     return fn

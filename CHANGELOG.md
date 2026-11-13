@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `inventory-checker check --offline`: run the whole headless flow with a stand-in detector and no API key,
+  to check an installation and see the outputs before spending credits. Results are labelled as not real.
+- `inventory-checker check --detector module:function`, and detectors in the current folder now load with the
+  installed command (`DETECTOR=examples.custom_detector:detect` used to fail with a traceback).
+- `check` exits 2 with a plain message when no photos or videos are found or the detector cannot be loaded.
+- No-key quick start in the README, `docs/headless.md` and `AGENTS.md`.
+
 ## 0.5.0
 
 Headless use (no browser or phone needed):

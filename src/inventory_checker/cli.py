@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> None:
                    help="Exit with status 1 if any item has this status (check also covers exception; not_scanned "
                         "covers both and unscanned items)")
     c.add_argument("--dry-run", action="store_true", help="List the scans that would run, without calling a model")
+    how = c.add_mutually_exclusive_group()
+    how.add_argument("--offline", action="store_true",
+                     help="Try the whole flow with no API key: a stand-in detector, no model call, results not real")
+    how.add_argument("--detector", metavar="MODULE:FUNCTION",
+                     help="Your own detector instead of a hosted model (same as the DETECTOR setting)")
     c.add_argument("--quiet", "-q", action="store_true", help="Only errors on stderr")
 
     m = sub.add_parser("mcp", help="Run as an MCP server for AI agents")
@@ -124,11 +129,30 @@ def run_check(args: argparse.Namespace) -> int:
     if not 1 <= args.segment_frames <= 6:
         _err("--segment-frames must be between 1 and 6")
         return 2
-    kw = {"detector": _never, "ai_label": "dry run"} if args.dry_run else {}
+    from . import detection
+    from .sample import demo_sample, parse_sample
+
     try:
-        check = InventoryCheck.demo(**kw) if args.demo else InventoryCheck.from_file(args.listing, **kw)
+        if args.demo:
+            sample = demo_sample()
+        else:
+            with open(args.listing, "rb") as fh:
+                sample = parse_sample(fh.read(), os.path.basename(args.listing))
     except (OSError, ValueError) as exc:
         _err(f"Listing: {exc}")
+        return 2
+    try:
+        if args.dry_run:
+            kw = {"detector": _never, "ai_label": "dry run"}
+        elif args.offline:
+            kw = {"detector": detection.new_offline_detector(), "ai_label": detection.OFFLINE_LABEL}
+        elif args.detector:
+            kw = {"detector": detection.load_custom_detector(args.detector), "ai_label": f"custom: {args.detector}"}
+        else:
+            kw = {}
+        check = InventoryCheck(sample, **kw)
+    except (ValueError, TypeError) as exc:  # a detector that cannot be loaded, or an unknown AI_PROVIDER
+        _err(f"Detection: {exc}")
         return 2
     check.details.update(client=args.client, location=args.location, count_date=args.count_date, counter=args.counter)
     say(f"Listing: {check.sample.name} - {len(check.sample.items)} items; attributes: "
@@ -137,6 +161,10 @@ def run_check(args: argparse.Namespace) -> int:
         segs = list(segments(args.media, args.every, args.segment_frames))
     except MediaError as exc:
         _err(str(exc))
+        return 2
+    if not segs:
+        _err("No photos or videos to scan: give image or video files, or a folder that contains some "
+             "(.jpg, .png, .webp, .mp4, .mov, ...)")
         return 2
     planned = segs[:args.max_scans]
     if len(segs) > len(planned):
@@ -147,9 +175,12 @@ def run_check(args: argparse.Namespace) -> int:
         say(f"Dry run: {len(planned)} model call(s) would be made. Nothing was sent.")
         return 0
     if not check.ai_ready:
-        _err("No AI provider is configured: set ANTHROPIC_API_KEY (or the Azure OpenAI / OpenAI settings, see README)")
+        _err("No AI provider is configured: set ANTHROPIC_API_KEY (or the Azure OpenAI / OpenAI settings, see README).\n"
+             "To try the flow without a key, add --offline (a stand-in detector; results are not real).")
         return 2
     say(f"Detection: {check.ai_label} - {len(planned)} scan(s)")
+    if args.offline:
+        _err("NOTE: --offline does not look at the images. Use it to try the flow, never for a real count.")
     errors: list[str] = []
 
     def on_scan(seg, scan) -> None:

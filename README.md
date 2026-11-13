@@ -119,6 +119,16 @@ Open the printed **"Open on the laptop"** link, then follow the steps on the pag
 
 ## Run it headless (no browser, no phone)
 
+Try it in a minute, with no API key and no cost (the stand-in detector does not look at the image, so the
+numbers are not real):
+
+```bash
+git clone https://github.com/rbaran17/Inventory-Checker-Agent && cd Inventory-Checker-Agent
+python3 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -e .
+inventory-checker check --listing examples/items_to_be_tested.csv docs/assets/phone-camera.png --offline --out results.xlsx
+```
+
 The same engine runs from the command line, as an **MCP server** for AI agents, or as a **Python library**,
 which is handy for automation, agents and your own apps. Full guide: **[docs/headless.md](docs/headless.md)**.
 
