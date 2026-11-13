@@ -274,3 +274,85 @@ def test_mcp_demo_and_inline_csv(workdir):
     assert call(server, "load_listing_csv", csv_text=LISTING)["items"] == 2
     details = call(server, "set_details", client="Acme", counter="R. Auditor")
     assert details["client"] == "Acme"
+
+
+# ----------------------------------------------------------------------------- trying it with no API key
+
+
+def _no_provider(monkeypatch):
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "DETECTOR", "AI_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_cli_offline_runs_end_to_end_without_a_key(workdir, monkeypatch, capsys):
+    from inventory_checker import cli
+
+    _no_provider(monkeypatch)
+    out = workdir / "offline.xlsx"
+    args = ["check", "--listing", str(workdir / "items.csv"), str(workdir / "photos"), "--offline", "--json",
+            "--out", str(out)]
+    with pytest.raises(SystemExit) as done:
+        cli.main(args)
+    captured = capsys.readouterr()
+    assert done.value.code == 0
+    data = json.loads(captured.out)
+    assert "offline stand-in" in data["detection"] and data["errors"] == [] and data["scans"]
+    assert "does not look at the images" in captured.err
+    assert "offline stand-in" in load_workbook(out)["Summary"]["B8"].value  # the workbook says so too
+
+
+def test_cli_without_key_points_to_offline(workdir, monkeypatch, capsys):
+    from inventory_checker import cli
+
+    _no_provider(monkeypatch)
+    with pytest.raises(SystemExit) as done:
+        cli.main(["check", "--listing", str(workdir / "items.csv"), str(workdir / "photos")])
+    assert done.value.code == 2 and "--offline" in capsys.readouterr().err
+
+
+def test_cli_detector_in_current_folder_and_plain_errors(workdir, monkeypatch, capsys):
+    import sys
+
+    from inventory_checker import cli
+
+    _no_provider(monkeypatch)
+    (workdir / "my_detector.py").write_text(
+        "from inventory_checker.detection import SceneResult\n"
+        "async def detect(frames, sample):\n    return SceneResult(notes='mine')\n", encoding="utf-8")
+    monkeypatch.chdir(workdir)
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if p not in ("", str(workdir))])
+    base = ["check", "--listing", "items.csv", "photos", "-q"]
+
+    with pytest.raises(SystemExit) as done:
+        cli.main([*base, "--detector", "my_detector:detect", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert done.value.code == 0 and data["detection"] == "custom: my_detector:detect"
+    assert data["scans"][0]["notes"] == "mine"
+
+    for spec, text in [("no_such_module:detect", "cannot import"), ("my_detector:nope", "has no 'nope'"),
+                       ("my_detector", "module:function")]:
+        with pytest.raises(SystemExit) as done:
+            cli.main([*base, "--detector", spec])
+        err = capsys.readouterr().err
+        assert done.value.code == 2 and text in err and "Traceback" not in err, spec
+
+    monkeypatch.setenv("DETECTOR", "no_such_module:detect")  # the setting gets the same plain message
+    with pytest.raises(SystemExit) as done:
+        cli.main(base)
+    assert done.value.code == 2 and "cannot import" in capsys.readouterr().err
+
+
+def test_cli_with_nothing_to_scan_says_so(workdir, monkeypatch, capsys):
+    from inventory_checker import cli
+
+    _no_provider(monkeypatch)
+    empty = workdir / "empty"
+    empty.mkdir()
+    (empty / "notes.txt").write_text("not a photo", encoding="utf-8")
+    for media in ([], [str(empty)]):
+        with pytest.raises(SystemExit) as done:
+            cli.main(["check", "--demo", *media, "--offline"])
+        assert done.value.code == 2 and "No photos or videos" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as done:  # CI smoke-tests the image with exactly this
+        cli.main(["check", "--demo", "--dry-run"])
+    assert done.value.code == 0 and "0 model call(s)" in capsys.readouterr().err

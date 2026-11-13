@@ -27,6 +27,23 @@ pip install -e ".[all]"      # from a clone: CLI + video support + MCP server + 
 export ANTHROPIC_API_KEY=sk-ant-...   # or the Azure OpenAI / OpenAI settings
 ```
 
+On Windows, activate the virtual environment with `.venv\Scripts\activate` and set variables with
+`$env:ANTHROPIC_API_KEY = "sk-ant-..."` (PowerShell).
+
+### Try it first, without an API key
+
+From a clone, this runs the whole flow (listing, scan, match, export) in a few seconds and spends nothing:
+
+```bash
+inventory-checker check --listing examples/items_to_be_tested.csv docs/assets/phone-camera.png \
+    --offline --out results.xlsx --json
+```
+
+`--offline` swaps the model for a stand-in that never looks at the image: each scan "sees" the next listed
+item. The numbers are not real. It's there so you (or an agent) can check the installation, see the output
+files and the JSON shape, and wire up a script before spending credits. Drop `--offline` and set a provider
+key for a real count.
+
 Reading **videos** needs PyAV (the `video` extra) or the `ffmpeg` command on your PATH. Photos need nothing
 extra. **HEIC photos** aren't supported: export them as JPEG, or set the iPhone camera to *Most Compatible*.
 
@@ -55,6 +72,8 @@ inventory-checker check --listing items_to_be_tested.xlsx  photos/  aisle3.mp4  
 | `--segment-frames N` | Video: frames per scan, 1–6 (default 4) |
 | `--max-scans N` | Cost guard: stop after N scans (default 50) |
 | `--dry-run` | List the scans that would run and how many model calls they make. Sends nothing and needs no API key |
+| `--offline` | Run everything with a stand-in detector and no model call. For trying the flow; results are not real |
+| `--detector MODULE:FUNCTION` | Your own detector instead of a hosted model (same as `DETECTOR`, see [extending.md](extending.md)). Modules in the current folder are found |
 | `--json` | Print full results as JSON on **stdout**. Progress always goes to **stderr**, so you can pipe stdout |
 | `--fail-on STATUS` | Exit 1 if any item has that status (see below) |
 | `--quiet` | Only errors on stderr |
@@ -70,7 +89,7 @@ inventory-checker check --listing items_to_be_tested.xlsx  photos/  aisle3.mp4  
 |---|---|
 | `0` | Done |
 | `1` | `--fail-on` matched |
-| `2` | Setup or usage error (listing unreadable, media missing, no AI provider), or every scan failed |
+| `2` | Setup or usage error (listing unreadable, no photos or videos found, no AI provider, detector not loadable), or every scan failed |
 
 Single scans that fail are reported on stderr and skipped. Check the cost first with
 `inventory-checker check --listing items.xlsx photos/ clip.mp4 --dry-run`.
