@@ -162,7 +162,7 @@ def run_check(args: argparse.Namespace) -> int:
     except MediaError as exc:
         _err(str(exc))
         return 2
-    if not segs:
+    if not segs and not args.dry_run:  # a dry run with nothing to scan still reports 0 model calls
         _err("No photos or videos to scan: give image or video files, or a folder that contains some "
              "(.jpg, .png, .webp, .mp4, .mov, ...)")
         return 2

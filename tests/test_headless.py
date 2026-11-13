@@ -353,3 +353,6 @@ def test_cli_with_nothing_to_scan_says_so(workdir, monkeypatch, capsys):
         with pytest.raises(SystemExit) as done:
             cli.main(["check", "--demo", *media, "--offline"])
         assert done.value.code == 2 and "No photos or videos" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as done:  # CI smoke-tests the image with exactly this
+        cli.main(["check", "--demo", "--dry-run"])
+    assert done.value.code == 0 and "0 model call(s)" in capsys.readouterr().err
