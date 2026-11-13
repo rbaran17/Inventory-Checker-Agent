@@ -117,6 +117,35 @@ Open the printed **"Open on the laptop"** link, then follow the steps on the pag
 > Use `127.0.0.1`, not `localhost`, in the tunnel command: on macOS `localhost` resolves to IPv6 first, while
 > the app listens on IPv4.
 
+## Run it headless (no browser, no phone)
+
+The same engine runs from the command line, as an **MCP server** for AI agents, or as a **Python library**,
+which is handy for automation, agents and your own apps. Full guide: **[docs/headless.md](docs/headless.md)**.
+
+```bash
+pip install -e ".[all]"                     # adds video support and the MCP server
+
+# CLI: photos/videos on disk -> results file
+inventory-checker check --listing items.xlsx photos/ aisle3.mp4 --out results.xlsx --fail-on exception
+inventory-checker check --demo photos/ --dry-run      # shows how many model calls it would make
+
+# MCP server: let Claude Code / Claude Desktop / any MCP client run counts
+claude mcp add inventory-checker --env ANTHROPIC_API_KEY=sk-ant-... -- inventory-checker mcp --allowed-dir ~/counts
+```
+
+```python
+from inventory_checker import InventoryCheck
+
+check = InventoryCheck.from_file("items.xlsx")
+check.check_paths(["photos/", "aisle3.mp4"])
+print(check.summary)
+check.export("results.xlsx")
+```
+
+Photos are scanned like phone close-ups, and videos are split into 4-frame segments like the phone's Scan
+mode, so headless runs cost and behave like the phone flow. To give your own Microsoft Agent Framework agent
+these capabilities, add `check.as_tools()` to its tools.
+
 ## Choosing a model provider
 
 Every provider is a Microsoft Agent Framework chat client. Set one group of variables. If several are
@@ -233,12 +262,15 @@ src/inventory_checker/
   providers.py     Anthropic / Azure OpenAI / OpenAI chat clients and the provider registry
   sample.py        items to be tested listing: CSV/Excel import, demo items, reconcile, compare, assess
   export.py        results CSV and Excel workbook
-  api.py           FastAPI app, access key, in-memory state
+  engine.py        InventoryCheck: the headless engine (scan, match, review, export) shared by everything
+  media.py         photos and videos on disk -> frames and video segments
+  mcp_server.py    MCP server for AI agents
+  api.py           FastAPI web app, in-memory state; security.py: access keys and limits
   tunnel.py        discovers the Cloudflare quick-tunnel address
-  cli.py           `inventory-checker serve`
+  cli.py           `inventory-checker serve | check | mcp | rotate-key`
   static/          scan.html (phone camera), dashboard.html (laptop workflow)
 examples/          example items to be tested listing, custom detector
-docs/              providers, extending, deployment
+docs/              providers, extending, deployment, headless (CLI / MCP / Python API)
 tests/             unit and API tests; providers tested against local fakes of their APIs
 Dockerfile, compose.yaml, .github/workflows/
 ```
@@ -246,7 +278,7 @@ Dockerfile, compose.yaml, .github/workflows/
 ## Development
 
 ```bash
-pip install -e ".[dev,azure]"
+pip install -e ".[dev,all]"
 pytest                          # no API keys or network needed
 ruff check src tests examples
 docker build -t inventory-checker-agent:local .

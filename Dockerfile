@@ -37,7 +37,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY --from=build /dist/*.whl /tmp/
 RUN --mount=type=secret,id=pip_ca,required=false \
     if [ -f /run/secrets/pip_ca ]; then export PIP_CERT=/run/secrets/pip_ca; fi; \
-    pip install "$(ls /tmp/*.whl)[azure]" && rm -f /tmp/*.whl \
+    pip install "$(ls /tmp/*.whl)[azure,video,mcp]" && rm -f /tmp/*.whl \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
     && mkdir -p /data && chown app:app /data
 

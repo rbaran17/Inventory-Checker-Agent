@@ -29,9 +29,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import detection, export, providers, security
+from . import detection, export, security
 from .config import Settings
-from .sample import TEMPLATE_CSV, Sample, assess, demo_sample, parse_sample, reconcile
+from .engine import build_scan, detector_from_env, rereconcile
+from .sample import TEMPLATE_CSV, Sample, assess, demo_sample, parse_sample
 
 log = logging.getLogger("inventory_checker")
 
@@ -69,19 +70,8 @@ class ReviewIn(BaseModel):
     note: str = Field("", max_length=2000)
 
 
-def _detector_from_env() -> tuple[Detector | None, str | None]:
-    """Custom ``DETECTOR`` if set, else a MAF agent on the selected provider. Returns (detector, label)."""
-    if spec := os.getenv("DETECTOR"):
-        return detection.load_custom_detector(spec), f"custom: {spec}"
-    built = providers.build_chat_client()
-    if built is None:
-        return None, None
-    client, name, model = built
-
-    async def run(frames: list[tuple[bytes, str]], sample: Sample) -> detection.SceneResult:
-        return await detection.detect(client, frames, sample)
-
-    return run, f"{name}: {model}"
+# Kept for callers of the earlier name; the shared implementation lives in engine.py.
+_detector_from_env = detector_from_env
 
 
 def _new_workspace(sample: Sample | None = None) -> dict[str, Any]:
@@ -309,15 +299,8 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         for name, value in (body.attributes or {}).items():
             if name in item.attributes:
                 item.attributes[name] = value.strip()[:200]
-        _rereconcile(ws("demo"))
+        rereconcile(ws("demo")["sample"], ws("demo")["scans"])
         return _snapshot()
-
-    def _rereconcile(w: dict[str, Any]) -> None:
-        """Re-match objects after the sample changed (keeps matches the auditor set by hand)."""
-        for scan in w["scans"]:
-            for obj in scan["objects"]:
-                if obj.get("mapped_by") != "you":
-                    obj["item_id"], obj["match_basis"] = reconcile(w["sample"], obj)
 
     # ------------------------------------------------------------------ scans
     @app.post("/api/scans")
@@ -367,15 +350,7 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
             raise HTTPException(409, "The listing changed while this scan was being analysed. Scan again.")
         scan_id = f"S{state['next_scan']:03d}"
         state["next_scan"] += 1
-        objects = []
-        for n, o in enumerate(result.objects, start=1):
-            # "id" stays with the object for its lifetime; positions shift when another object is removed.
-            obj = {"id": str(n), **o.model_dump(), "suggested_item_id": o.matched_item_id, "mapped_by": "ai"}
-            obj["item_id"], obj["match_basis"] = reconcile(w["sample"], obj)
-            objects.append(obj)
-        scan = {"id": scan_id, "taken_at": time.strftime("%H:%M:%S"), "seconds": round(time.time() - started, 1),
-                "frames": len(images), "kind": "photo" if len(images) == 1 else "video",
-                "image_quality": result.image_quality, "notes": result.notes, "objects": objects}
+        scan = build_scan(scan_id, result, sample, frames=len(images), seconds=time.time() - started)
         w["scans"].append(scan)
         w["images"][scan_id] = [(data, media_type, hashlib.sha256(data).hexdigest()[:32])
                                 for data, media_type in images]

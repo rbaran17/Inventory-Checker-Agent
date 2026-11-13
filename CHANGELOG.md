@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+Headless use (no browser or phone needed):
+
+- `inventory-checker check`: scan photos, videos or folders against a listing and write `.xlsx`/`.csv`/`.json`.
+  Includes `--dry-run` (model-call count, no API key needed), `--json` on stdout, `--fail-on` exit codes and a
+  `--max-scans` cost guard. Videos become 4-frame segments (PyAV or ffmpeg); photos are rotated using EXIF data
+  and downscaled like phone close-ups.
+- `inventory-checker mcp`: MCP server (stdio or streamable HTTP) with tools to load a listing, check
+  media or an inline image, get results, correct matches, review and export. File access is confined to
+  `--allowed-dir`.
+- Python API: `from inventory_checker import InventoryCheck`. `as_tools()` exposes it to Microsoft Agent
+  Framework agents.
+- The web app, CLI, MCP server and API share one scan-building and matching path (`engine.py`).
+- New extras: `video`, `mcp`, `all`. The Docker image includes them. Added `docs/headless.md` and `AGENTS.md`.
+
 
 Security:
 

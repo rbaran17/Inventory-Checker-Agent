@@ -1,6 +1,6 @@
 [project]
 name = "inventory-checker-agent"
-version = "0.4.0"
+version = "0.5.0"
 description = "Count and verify inventory with a phone camera: an AI agent on Microsoft Agent Framework identifies objects, reads serial and model numbers, and matches them to an audit sample."
 readme = "README.md"
 license = "MIT"
@@ -37,6 +37,9 @@ dependencies = [
 
 [project.optional-dependencies]
 azure = ["azure-identity>=1.17"]   # keyless Azure OpenAI sign-in (Entra ID / managed identity)
+video = ["av>=12"]                 # read video files in headless runs (or have ffmpeg on PATH)
+mcp = ["mcp>=2.0,<3"]              # `inventory-checker mcp`: MCP server for AI agents
+all = ["inventory-checker-agent[azure,video,mcp]"]
 dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "build>=1.2"]
 
 [project.scripts]

@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev,azure]"
+      - run: pip install -e ".[dev,all]"
       - run: ruff check src tests examples
       - run: pytest -q
 
@@ -58,3 +58,7 @@ jobs:
           curl -fsS -c jar "http://127.0.0.1:8000/?key=ci" -o /dev/null
           curl -fsS -b jar http://127.0.0.1:8000/api/state | python3 -c "import json,sys; s=json.load(sys.stdin); assert s['workspaces']['demo']['has_sample'] and s['active']=='engagement'"
           docker logs app
+      - name: Smoke test headless CLI and MCP server in the image
+        run: |
+          docker run --rm inventory-checker-agent:ci inventory-checker check --demo --dry-run
+          docker run --rm inventory-checker-agent:ci python -c "from inventory_checker.mcp_server import build_server; build_server()"
