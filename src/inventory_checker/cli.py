@@ -83,15 +83,27 @@ def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
     from .api import create_app
-    from .config import Settings
+    from .config import MIN_ACCESS_KEY_CHARS, Settings, SetupError
 
-    settings = Settings()
+    try:
+        settings = Settings()
+    except SetupError as exc:
+        _err(f"Setup: {exc}")
+        sys.exit(2)
     app = create_app(settings)
     ai = f"on ({app.state.ai_label})" if app.state.ai_ready else "OFF - configure an AI provider (see README)"
     local = os.getenv("LAPTOP_URL", f"http://localhost:{args.port}").rstrip("/")
     lines = [f"Open on the laptop:  {local}/?key={settings.access_key}", f"AI detection:        {ai}"]
-    if len(settings.access_key) < 16:
-        lines.append("WARNING: the access key is short and could be guessed. Use 16+ random characters.")
+    if len(settings.access_key) < MIN_ACCESS_KEY_CHARS:  # a key saved by an older version, or edited by hand
+        lines.append("WARNING: the saved access key is short and could be guessed. Run "
+                     "`inventory-checker rotate-key` and restart.")
+    # X-Forwarded-For and X-Forwarded-Proto are believed only when the connection comes from one of these
+    # addresses (the HTTPS tunnel or proxy in front of the app). The address is what wrong keys are counted
+    # against, so a client must not be able to choose it.
+    forwarded = os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")
+    if "*" in [part.strip() for part in forwarded.split(",")]:
+        lines.append("WARNING: FORWARDED_ALLOW_IPS=* believes X-Forwarded-For from anyone, so the wrong-key limit "
+                     "can be sidestepped. List your proxy's address instead.")
     if settings.public_base_url:
         lines += [f"Public address:      {settings.public_base_url}",
                   "The phone gets its link from the QR code on the laptop page."]
@@ -113,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
     else:
         _banner([*lines, "Public address:      not set - the phone needs HTTPS (see README: tunnel)"])
     uvicorn.run(app, host=args.host, port=args.port, ssl_certfile=args.certfile, ssl_keyfile=args.keyfile,
-                proxy_headers=True, forwarded_allow_ips="*")
+                proxy_headers=True, forwarded_allow_ips=forwarded)
 
 
 def _err(msg: str) -> None:
@@ -123,7 +135,7 @@ def _err(msg: str) -> None:
 def run_check(args: argparse.Namespace) -> int:
     """Exit codes: 0 done, 1 --fail-on matched, 2 usage/setup error or every scan failed."""
     from .engine import InventoryCheck
-    from .media import MediaError, segments
+    from .media import MediaError, plan
 
     say = (lambda *_: None) if args.quiet else _err
     if not 1 <= args.segment_frames <= 6:
@@ -158,17 +170,18 @@ def run_check(args: argparse.Namespace) -> int:
     say(f"Listing: {check.sample.name} - {len(check.sample.items)} items; attributes: "
         f"{', '.join(check.sample.attribute_names) or 'none'}")
     try:
-        segs = list(segments(args.media, args.every, args.segment_frames))
+        # Reading stops at --max-scans: what lies beyond it is not decoded, so it is counted in files.
+        planned, left = plan(args.media, args.max_scans, args.every, args.segment_frames)
     except MediaError as exc:
         _err(str(exc))
         return 2
-    if not segs and not args.dry_run:  # a dry run with nothing to scan still reports 0 model calls
+    if not planned and not left and not args.dry_run:  # a dry run with nothing to scan still reports 0 model calls
         _err("No photos or videos to scan: give image or video files, or a folder that contains some "
              "(.jpg, .png, .webp, .mp4, .mov, ...)")
         return 2
-    planned = segs[:args.max_scans]
-    if len(segs) > len(planned):
-        say(f"Note: {len(segs)} scans found, only the first {len(planned)} will run (--max-scans)")
+    if left:
+        say(f"Note: only the first {len(planned)} scan(s) will run (--max-scans). {left} file(s) were not read, "
+            "or only in part: raise --max-scans to include them.")
     if args.dry_run:
         for i, seg in enumerate(planned, 1):
             say(f"  {i:>3}. {seg.source.name} {seg.label} ({len(seg.frames)} frame{'s' if len(seg.frames) > 1 else ''})")

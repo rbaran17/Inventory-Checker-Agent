@@ -6,9 +6,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Read-only by default. Each job below is given the one write permission it needs, and no checkout leaves the
+# token in the repository's git config for later steps (builds, pip) to find.
 permissions:
-  contents: write      # GitHub release for tags
-  packages: write      # GHCR image
+  contents: read
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/inventory-checker-agent
@@ -16,8 +17,13 @@ env:
 jobs:
   image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write    # push the image to GHCR
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -51,8 +57,12 @@ jobs:
   python-package:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create the GitHub release and attach the wheel and source archive
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

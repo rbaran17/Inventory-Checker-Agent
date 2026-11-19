@@ -237,7 +237,7 @@ The most used settings are below. The full table is in [docs/deployment.md](docs
 | `AI_PROVIDER` | auto | `anthropic`, `azure_openai`, `openai` or `none` |
 | `AI_MAX_TOKENS` | `4000` | Output cap per scan |
 | `PUBLIC_BASE_URL` | discovered from tunnel | HTTPS address the phone opens |
-| `APP_ACCESS_KEY` | generated once, then reused | Access key in the laptop link; the QR code carries a phone-only key derived from it |
+| `APP_ACCESS_KEY` | generated once, then reused | Access key in the laptop link; the QR code carries a phone-only key derived from it. If you set one, use at least 16 random characters |
 | `SAMPLE_FILE` | – | Items to be tested listing loaded into the Engagement tab at startup |
 | `DETECTOR` | – | Custom detector `module:function` |
 
@@ -304,6 +304,8 @@ source archive. See [CONTRIBUTING.md](CONTRIBUTING.md).
 |---|---|
 | Tunnel log: "Unable to reach the origin service" | The app isn't running, or the tunnel points at `localhost` (use `127.0.0.1`) |
 | Every request `401 Unauthorized` / red "access key" banner | Open the **"Open on the laptop"** link again and rescan the QR code |
+| "Too many wrong access keys from this address" (`429`) | Ten wrong keys or stale sessions came from your address. Wait five minutes. If it keeps happening behind your own proxy, set `FORWARDED_ALLOW_IPS` ([deployment](docs/deployment.md#behind-a-tunnel-or-proxy)) |
+| Server exits with "APP_ACCESS_KEY is too short" | Remove `APP_ACCESS_KEY` to use the generated key, or set 16 or more random characters |
 | Camera never asks for permission | The phone page isn't HTTPS. Use the tunnel address, and open it in the phone's browser itself |
 | "AI off" badge / **AI detection: OFF** | No provider configured in the environment the server runs in |
 | Red **"Scan not saved"** on the phone | The model call failed. The reason is shown there, and the server log has details (key, model access, credits) |

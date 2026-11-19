@@ -52,10 +52,10 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Smoke test (health check, access key, pages)
         run: |
-          docker run -d --name app -p 8000:8000 -e APP_ACCESS_KEY=ci inventory-checker-agent:ci
+          docker run -d --name app -p 8000:8000 -e APP_ACCESS_KEY=ci-smoke-test-key-0123 inventory-checker-agent:ci
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/healthz && break; sleep 1; done
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/state)" = 401
-          curl -fsS -c jar "http://127.0.0.1:8000/?key=ci" -o /dev/null
+          curl -fsS -c jar "http://127.0.0.1:8000/?key=ci-smoke-test-key-0123" -o /dev/null
           curl -fsS -b jar http://127.0.0.1:8000/api/state | python3 -c "import json,sys; s=json.load(sys.stdin); assert s['workspaces']['demo']['has_sample'] and s['active']=='engagement'"
           docker logs app
       - name: Smoke test headless CLI and MCP server in the image

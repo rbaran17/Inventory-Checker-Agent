@@ -21,9 +21,10 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .engine import Detector, InventoryCheck
-from .media import MediaError, segments
+from .media import MediaError, plan
 
 MAX_INLINE_IMAGE_BYTES = 15 * 1024 * 1024
+MAX_SCANS_PER_CALL = 200   # check_media prepares its scans before the first model call: this bounds that work
 STATUSES = ("verified", "check", "exception", "not_scanned")
 
 INSTRUCTIONS = """Inventory count verification. Typical flow:
@@ -139,17 +140,20 @@ def build_server(*, allowed_dir: str | Path | None = None, detector: Detector | 
     async def check_media(paths: list[str], every_seconds: float = 1.0, segment_frames: int = 4,
                           max_scans: int = 50) -> dict[str, Any]:
         """Scan photos and/or videos (files or folders inside the allowed folder). One model call per photo and
-        per video segment of `segment_frames` frames taken every `every_seconds`. Stops after `max_scans`."""
+        per video segment of `segment_frames` frames (1 to 6) taken every `every_seconds` (0.1 to 3600).
+        Stops after `max_scans` (at most 200 in one call) and reads no further: `skipped` is the number of
+        files left unscanned or only partly scanned. Pass those files in another call to continue."""
         check = current()
         errors: list[str] = []
         try:
-            segs = list(segments([inside(p) for p in paths], every_seconds, segment_frames))
+            segs, skipped = plan([inside(p) for p in paths], min(max_scans, MAX_SCANS_PER_CALL), every_seconds,
+                                 segment_frames)
         except MediaError as exc:
             raise ValueError(str(exc)) from exc
-        scans = await check.acheck_segments(segs, max_scans=max_scans,
-                                            on_error=lambda seg, exc: errors.append(f"{seg.source.name} {seg.label}: {exc}"))
-        return {"scans": [_compact_scan(s) for s in scans], "skipped": max(0, len(segs) - max_scans),
-                "errors": errors, "summary": check.summary}
+        scans = await check.acheck_segments(
+            segs, on_error=lambda seg, exc: errors.append(f"{seg.source.name} {seg.label}: {exc}"))
+        return {"scans": [_compact_scan(s) for s in scans], "skipped": skipped, "errors": errors,
+                "summary": check.summary}
 
     @server.tool()
     @_friendly

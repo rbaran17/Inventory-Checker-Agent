@@ -145,8 +145,8 @@ def test_access_key_survives_restarts(monkeypatch, tmp_path):
     assert load_or_create_access_key() == first and len(first) >= 24
     if os.name == "posix":  # Windows has no owner-only mode bits; the profile folder's ACL protects the file
         assert (tmp_path / "key").stat().st_mode & 0o777 == 0o600
-    monkeypatch.setenv("APP_ACCESS_KEY", "fixed")
-    assert load_or_create_access_key() == "fixed"
+    monkeypatch.setenv("APP_ACCESS_KEY", "fixed-key-of-24-characters")
+    assert load_or_create_access_key() == "fixed-key-of-24-characters"
 
 
 def test_phone_results_view_and_removal():

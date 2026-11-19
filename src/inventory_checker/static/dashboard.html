@@ -233,7 +233,7 @@
   function scanCard(s, sc) {
     return `<div class="scan"><div class="hd"><div><b>${sc.id}</b> <span class="muted small">${sc.taken_at} · ${sc.kind === "photo" ? "close-up" : sc.frames + " frames"} · ${sc.seconds}s · image ${esc(sc.image_quality)}</span></div>
       <button class="btn plain sm" data-del="${sc.id}">Remove</button></div>
-      <div class="frames">${Array.from({ length: sc.frames }, (_, i) => `<a href="/api/scans/${sc.id}/frames/${i}" target="_blank"><img loading="lazy" src="/api/scans/${sc.id}/frames/${i}" alt=""></a>`).join("")}</div>
+      <div class="frames">${sc.images_dropped ? '<span class="muted small">Images no longer kept (the oldest are dropped to save memory). The results below are unchanged.</span>' : Array.from({ length: sc.frames }, (_, i) => `<a href="/api/scans/${sc.id}/frames/${i}" target="_blank"><img loading="lazy" src="/api/scans/${sc.id}/frames/${i}" alt=""></a>`).join("")}</div>
       ${sc.notes ? `<div class="small muted" style="padding:6px 12px 0">${esc(sc.notes)}</div>` : ""}
       <table><thead><tr><th>Object</th><th class="num">Qty</th><th>Read from label</th><th>Matched to</th></tr></thead><tbody>
       ${sc.objects.map((o) => `<tr><td><b>${esc(o.name)}</b><div class="small muted">${Math.round(o.confidence * 100)}% confidence${o.notes ? " · " + esc(o.notes) : ""}</div></td><td class="num">${o.count}</td>
@@ -270,7 +270,7 @@
     const rv = r.review || {};
     const qtyRow = `<tr><td><b>Quantity</b></td><td class="mono">${r.expected_qty}</td><td class="mono">${r.counted_qty}</td><td>${r.qty_difference === 0 ? chip(["ok", "Match"]) : chip(["bad", `Difference ${r.qty_difference > 0 ? "+" : ""}${r.qty_difference}`])}</td></tr>`;
     return `<div class="review ${rv.decision ? "done" : "todo"}"><div class="row between"><div><span class="mono small">${esc(r.item_id)}</span> <b>${esc(r.description)}</b> ${chip(STATUS[r.status])}<div class="small muted">${esc(r.location)}${r.evidence_scan ? ` · evidence <b>${r.evidence_scan}</b>` : ""}</div></div>
-      ${r.evidence_scan ? `<a href="/api/scans/${r.evidence_scan}/frames/0" target="_blank"><img src="/api/scans/${r.evidence_scan}/frames/0" style="height:64px;border-radius:6px;border:1px solid var(--line)" alt=""></a>` : ""}</div>
+      ${r.evidence_scan && !(s.scans.find(sc => sc.id === r.evidence_scan) || {}).images_dropped ? `<a href="/api/scans/${r.evidence_scan}/frames/0" target="_blank"><img src="/api/scans/${r.evidence_scan}/frames/0" style="height:64px;border-radius:6px;border:1px solid var(--line)" alt=""></a>` : ""}</div>
       <table class="cmp" style="margin:10px 0"><thead><tr><th>Check</th><th>Expected</th><th>Read by camera</th><th>Result</th></tr></thead><tbody>${qtyRow}
       ${r.checks.filter(c => c.result !== "n/a").map(c => `<tr><td><b>${esc(c.name)}</b></td><td class="mono">${esc(c.expected) || '<span class="muted">(record)</span>'}</td><td class="mono">${c.observed.map(esc).join("<br>") || "—"}</td><td>${chip(RESULT[c.result])}</td></tr>`).join("")}</tbody></table>
       <div class="row"><button class="btn sm okb ${rv.decision === "accepted" ? "sel" : ""}" data-decide="accepted" data-item="${esc(r.item_id)}">✓ Accept</button>

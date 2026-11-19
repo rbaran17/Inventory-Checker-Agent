@@ -288,7 +288,7 @@
     $("summary").innerHTML = s ? [["ok", "Verified", s.verified], ["warn", "Check", s.check], ["bad", "Exception", s.exception], ["", "To scan", s.not_scanned]]
       .map(([c, l, v]) => `<div class="${c}"><span>${l}</span><b>${v}</b></div>`).join("") : "";
     $("list").innerHTML = view.scans.length ? view.scans.slice().reverse().map(sc => `<div class="scan">
-      <div class="meta"><img src="/api/scans/${sc.id}/frames/0" alt="" loading="lazy"><div><b>${esc(sc.id)} · ${sc.kind === "photo" ? "Close-up" : "Scan"}</b>
+      <div class="meta">${sc.images_dropped ? "" : `<img src="/api/scans/${sc.id}/frames/0" alt="" loading="lazy">`}<div><b>${esc(sc.id)} · ${sc.kind === "photo" ? "Close-up" : "Scan"}</b>
         <span class="sub">${esc(sc.taken_at)} · ${sc.objects.length} item${sc.objects.length === 1 ? "" : "s"}</span></div>
         <button class="tbtn danger" data-rmscan="${sc.id}" data-label="Delete">Delete</button></div>
       ${sc.objects.map((o) => objectRow(sc.id, o)).join("")}</div>`).join("")

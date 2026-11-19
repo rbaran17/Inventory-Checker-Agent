@@ -41,7 +41,7 @@ Detector = detection.Detector
 ALLOWED_IMAGES = {"image/jpeg", "image/png", "image/webp"}
 PHONE_TIMEOUT_SECONDS = 20
 BODY_OVERHEAD_BYTES = 1024 * 1024     # multipart boundaries and headers on top of MAX_UPLOAD_BYTES
-KEY_ATTEMPTS, KEY_ATTEMPT_WINDOW = 10, 300   # wrong keys allowed per client address, per 5 minutes
+KEY_ATTEMPTS, KEY_ATTEMPT_WINDOW = 10, 300   # wrong keys or session cookies per client address, per 5 minutes
 WORKSPACES = ("engagement", "demo")
 
 
@@ -113,8 +113,14 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         return state["ws"][name or state["active"]]
 
     # ------------------------------------------------------------------ access key
+    def _path(request: Request) -> str:
+        """The path the router matches. Never ``request.url.path``: that is rebuilt from the request line and
+        the Host header, so a Host of ``a/healthz?`` or a path of ``/healthz%3Fx`` can make it read ``/healthz``
+        while a different route (or none) is served."""
+        return request.scope["path"]
+
     def _denied(request: Request, status: int, message: str, **kw: Any) -> Response:
-        if request.url.path.startswith("/api"):
+        if _path(request).startswith("/api"):
             return JSONResponse({"detail": message}, status, **kw)
         return HTMLResponse(f"<p style='font:16px system-ui;padding:24px'>{message}</p>", status, **kw)
 
@@ -132,9 +138,8 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
             return _denied(request, 413, "Request too large")
         return None
 
-    @app.middleware("http")
-    async def require_key(request: Request, call_next):
-        path = request.url.path
+    async def _gate(request: Request, call_next) -> Response:
+        path = _path(request)
         if path == "/healthz":  # container health checks carry no key
             return await call_next(request)
         if (problem := _body_problem(request)) is not None:
@@ -142,11 +147,14 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
 
         role = None
         key = request.query_params.get("key")
-        caller = request.client.host if request.client else "unknown"
+        sessions = {name: request.cookies.get(name) for name in (security.LAPTOP_COOKIE, security.PHONE_COOKIE)}
+        caller = security.caller_key(request.client.host if request.client else None)
+        # A session cookie is derived from the key, so a guessed cookie is a guessed key: both are counted, and
+        # an address that is over the limit gets no answer for either until the window has passed.
+        if (key or any(sessions.values())) and key_attempts.blocked(caller):
+            return _denied(request, 429, "Too many wrong access keys from this address. Wait a few minutes.",
+                           headers={"Retry-After": str(KEY_ATTEMPT_WINDOW)})
         if key:
-            if key_attempts.blocked(caller):
-                return _denied(request, 429, "Too many wrong access keys from this address. Wait a few minutes.",
-                               headers={"Retry-After": str(KEY_ATTEMPT_WINDOW)})
             if security.same(key, settings.access_key):
                 role = "laptop"
             elif security.same(key, phone_key):
@@ -155,18 +163,21 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
                 key_attempts.record(caller)
             if role and request.method == "GET" and not path.startswith("/api"):
                 # Drop the key from the address bar and keep a derived session cookie instead.
-                resp = RedirectResponse(path if role == "laptop" else "/scan")
-                https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+                # One leading slash only: "//host/" is a path here but another website to a browser.
+                resp = RedirectResponse("/" + path.lstrip("/") if role == "laptop" else "/scan")
+                https = request.scope.get("scheme") == "https" or request.headers.get("x-forwarded-proto") == "https"
                 name, value = ((security.LAPTOP_COOKIE, laptop_cookie) if role == "laptop"
                                else (security.PHONE_COOKIE, phone_cookie))
                 resp.set_cookie(name, value, httponly=True, samesite="lax", secure=https,
                                 max_age=security.COOKIE_MAX_AGE)
                 return resp
         if role is None:
-            if security.same(request.cookies.get(security.LAPTOP_COOKIE, ""), laptop_cookie):
+            if security.same(sessions[security.LAPTOP_COOKIE] or "", laptop_cookie):
                 role = "laptop"
-            elif security.same(request.cookies.get(security.PHONE_COOKIE, ""), phone_cookie):
+            elif security.same(sessions[security.PHONE_COOKIE] or "", phone_cookie):
                 role = "phone"
+            elif any(sessions.values()):
+                key_attempts.record(caller)
         if role is None:
             if path == "/scan" or request.cookies.get(security.PHONE_COOKIE):
                 message = "Scan the QR code on the laptop to connect this phone."
@@ -181,6 +192,16 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         if role == "phone" and not security.phone_may(request.method, path):
             return _denied(request, 403, "The phone link can only scan. Use the laptop link for this.")
         return await call_next(request)
+
+    @app.middleware("http")
+    async def require_key(request: Request, call_next):
+        response = await _gate(request, call_next)
+        # Results, exports and sign-in redirects are for one signed-in browser: nothing between the server and
+        # that browser (a CDN that caches by file extension, a shared proxy) may keep a copy. A route that sets
+        # its own policy (stored frames: "private, no-cache" with an ETag) keeps it.
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        return response
 
     # ------------------------------------------------------------------ pages
     def _page(name: str) -> HTMLResponse:
@@ -354,7 +375,26 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
         w["scans"].append(scan)
         w["images"][scan_id] = [(data, media_type, hashlib.sha256(data).hexdigest()[:32])
                                 for data, media_type in images]
+        _trim_images(w, keep=scan_id)
         return {"workspace": workspace, "scan": scan, "summary": _assessment(w)["summary"]}
+
+    def _trim_images(w: dict[str, Any], keep: str) -> None:
+        """Keep the stored scan images of one tab under ``MAX_FRAME_STORE_BYTES``.
+
+        The oldest scans lose their images first. Their results (objects, counts, values read, matches,
+        reviews) are not touched, so the count and the exports stay complete; only the pictures are gone. The
+        scan that was just taken always keeps its images.
+        """
+        stored = {sid: sum(len(data) for data, _, _ in frames) for sid, frames in w["images"].items()}
+        total = sum(stored.values())
+        for sid in list(w["images"]):  # insertion order: oldest scan first
+            if total <= settings.max_frame_store_bytes or sid == keep:
+                break
+            total -= stored[sid]
+            del w["images"][sid]
+            for scan in w["scans"]:
+                if scan["id"] == sid:
+                    scan["images_dropped"] = True
 
     def _scan(scan_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
         """(workspace, scan) for an ID, whichever tab it belongs to: the laptop may have switched tabs since
@@ -373,8 +413,11 @@ def create_app(settings: Settings | None = None, *, detector: Detector | None = 
 
     @app.get("/api/scans/{scan_id}/frames/{index}")
     def scan_frame(scan_id: str, index: int, request: Request):
-        w, _ = _scan(scan_id)
+        w, scan = _scan(scan_id)
         frames = w["images"].get(scan_id)
+        if not frames and scan.get("images_dropped"):
+            raise HTTPException(404, "The images of this scan are no longer kept: the oldest images are dropped "
+                                     "to save memory. Its results are unchanged.")
         if not frames or not 0 <= index < len(frames):
             raise HTTPException(404, "Frame not found")
         data, media_type, digest = frames[index]

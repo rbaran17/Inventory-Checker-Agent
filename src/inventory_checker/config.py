@@ -7,6 +7,15 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Shortest APP_ACCESS_KEY accepted. The key is the only thing between the public tunnel address and the app,
+# and the phone link and session cookies are derived from it, so anyone who has seen a QR code can test guesses
+# offline. The key the app generates itself is 24 random characters.
+MIN_ACCESS_KEY_CHARS = 16
+
+
+class SetupError(ValueError):
+    """A setting that must be fixed before the server starts, with a message a person can act on."""
+
 
 def _key_file() -> Path:
     return Path(os.getenv("APP_ACCESS_KEY_FILE", Path.home() / ".config" / "inventory-checker" / "access_key"))
@@ -15,8 +24,14 @@ def _key_file() -> Path:
 def load_or_create_access_key() -> str:
     """``APP_ACCESS_KEY`` if set; otherwise a random key saved on first start and reused after restarts,
     so open laptop tabs and paired phones keep working when the server is restarted."""
-    if os.getenv("APP_ACCESS_KEY"):
-        return os.environ["APP_ACCESS_KEY"]
+    if key := os.getenv("APP_ACCESS_KEY"):
+        if len(key) < MIN_ACCESS_KEY_CHARS:
+            raise SetupError(
+                f"APP_ACCESS_KEY is too short ({len(key)} characters): it could be guessed. Either remove it, so "
+                "the app uses the random key it generates and saves itself (`inventory-checker rotate-key` "
+                f"replaces that one), or set it to at least {MIN_ACCESS_KEY_CHARS} random characters, for example "
+                "the output of:  python -c \"import secrets; print(secrets.token_urlsafe(18))\"")
+        return key
     path = _key_file()
     try:
         key = path.read_text(encoding="utf-8").strip()
@@ -57,6 +72,10 @@ class Settings:
     # Keeps strangers who find the tunnel address from using the app (and your API credits).
     access_key: str = field(default_factory=load_or_create_access_key)
     max_upload_bytes: int = field(default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024))))
+    # Scan images kept in memory for the laptop page, per tab. Past this the oldest scans' images are dropped;
+    # their results stay.
+    max_frame_store_bytes: int = field(
+        default_factory=lambda: int(os.getenv("MAX_FRAME_STORE_BYTES", str(256 * 1024 * 1024))))
     # Each scan is a paid model call. The phone sends about 15 a minute while recording, one at a time.
     max_scans_per_minute: int = field(default_factory=lambda: int(os.getenv("MAX_SCANS_PER_MINUTE", "30")))
     max_concurrent_scans: int = field(default_factory=lambda: int(os.getenv("MAX_CONCURRENT_SCANS", "2")))

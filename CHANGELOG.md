@@ -5,6 +5,44 @@
 - Security: Python 3.11 is now the minimum. Python 3.10 is end-of-life and can only install Pillow 12, which has
   open advisories and no fix; photos are decoded with Pillow. Minimum versions raised for `fastapi` (patched
   Starlette), `python-multipart`, `pillow` and `mcp`, so an existing install can no longer keep a vulnerable one.
+- Security: the access-key check now looks at the path the router serves. It read the path from the rebuilt
+  request URL: with an older Starlette, `Host: a/healthz?` made any request look like the health check and
+  be served without a key, and on current versions `/healthz%3Fx` got past the check before ending in a 404.
+- Security: `X-Forwarded-For` is believed only from the addresses in the new `FORWARDED_ALLOW_IPS` (default:
+  this machine; Docker Compose: the tunnel container, which now has a fixed address on a small private
+  network). It was believed from anyone, so a client could sidestep the wrong-key limit, lock another address
+  out, or make the limiter keep long strings. Addresses are validated and IPv6 is counted per /64. **If your
+  own proxy runs on another machine or in another container, set `FORWARDED_ALLOW_IPS`** (see
+  `docs/deployment.md`).
+- Security: wrong session cookies count towards the wrong-key limit. **Changed:** a blocked address now gets
+  429 for signed-in pages too until the five minutes are over; sessions are kept.
+- Security: a key set with `APP_ACCESS_KEY` must have at least 16 characters; the server exits with a setup
+  message otherwise. Generated keys are unchanged.
+- Security: videos are read only as MP4/MOV, Matroska/WebM or AVI and only from the file itself, with PyAV and
+  with ffmpeg. A DASH or HLS playlist named `.mp4` made ffmpeg fetch the URLs in it or decode another local
+  video. Photos are decoded only as JPEG, PNG, WebP, BMP, TIFF or GIF, and refused above 100 megapixels
+  before decoding (Pillow alone stopped at 200). Folder scans skip links that lead out of the folder.
+- Security: `--max-scans` / `max_scans` now stop the reading, not only the scanning: all frames of all files
+  used to be decoded and kept first. **Changed:** the note in `check` and `skipped` in MCP `check_media`
+  count the files left out, not scans; `check_media` prepares at most 200 scans per call; `--every` /
+  `every_seconds` must be 0.1 to 3,600 and `segment_frames` 1 to 6; the ffmpeg fallback has a 10-minute
+  timeout and a frame limit, and no longer shares the server's stdin.
+- Security: a listing may hold 4,000,000 characters of text in total (each item counts its cells and its
+  column names), and an Excel file's cell formats (2 MB), shared text table (8 MB), other housekeeping
+  parts (2 MB each) and any other single XML part such as a sheet (16 MB) are capped. A listing inside the row, column and cell limits could make every page
+  refresh 443 MB, and a 183 KB upload could take over 20 seconds and 1 GB or more of memory to open.
+- Security: the CSV export also neutralises listing column names (they were written as-is), and a formula
+  after a semicolon, tab or line break inside a value, which Excel with a semicolon list separator treats
+  as the start of a cell.
+- The Excel export no longer fails when a label, note or listing cell holds a control character; such
+  characters are removed, also when a listing is read.
+- Security: scan images kept in memory are capped per tab (`MAX_FRAME_STORE_BYTES`, default 256 MB). Past
+  it the oldest scans lose their images; their results, the count and the exports are unaffected.
+- Security: every response carries `Cache-Control: no-store` (stored frames keep `private, no-cache`) and
+  `X-Content-Type-Options: nosniff`.
+- Security: the sign-in redirect that drops the key from the address bar can no longer lead to another site
+  (`//host/?key=<valid key>` did).
+- Release workflow: read-only token by default, write permissions per job, no credentials left in checkouts.
 - `inventory-checker check --offline`: run the whole headless flow with a stand-in detector and no API key,
   to check an installation and see the outputs before spending credits. Results are labelled as not real.
 - `inventory-checker check --detector module:function`, and detectors in the current folder now load with the

@@ -76,6 +76,19 @@ sheet) both work. Example: [`examples/items_to_be_tested.csv`](../examples/items
 The model matches on the description, so plain, specific descriptions ("Cordless drill", not "SKU-4711 CDL
 18V") work best. A blank attribute cell means *record what is read* rather than *verify*.
 
+**Limits.** The listing comes from the audited party, so it is read defensively:
+
+| Limit | Value | What happens beyond it |
+|---|---|---|
+| Rows, including the header | 5,000 | Refused: split the listing |
+| Columns | 60 | Further columns are ignored |
+| Characters in one cell | 500 | The cell is cut |
+| Text in the whole listing | 4,000,000 characters | Refused. Each item counts its cells **and** its attribute column names, because the names are repeated for every item on the laptop page: remove columns that do not need checking, or split the listing |
+| Excel file, unpacked | 64 MB in total; 2 MB of cell formats; 8 MB for the shared text table; 2 MB for each other housekeeping part (workbook, relationships, properties, theme); 16 MB for any other single XML part, such as a sheet | Refused: save the listing as CSV |
+| Upload | `MAX_UPLOAD_BYTES` (15 MB) | Refused |
+
+Control characters (other than tab and line break) are removed from cells.
+
 **How attributes are compared** (`sample.compare`): uppercase, letters and digits only, and prefixes such as
 `S/N:` or `Model No.` are dropped. The results are:
 - **Match:** equal after normalising.
@@ -102,7 +115,9 @@ provider-neutral: every property required, `additionalProperties: false`, and no
 ## HTTP API
 
 The laptop and phone pages use a small JSON API. Every request needs a key, sent as a `?key=` query
-parameter or as the session cookie the server sets when a page is opened with `?key=`.
+parameter or as the session cookie the server sets when a page is opened with `?key=`. Ten wrong keys or
+cookies from one address answer 429 to that address for five minutes. Responses carry
+`Cache-Control: no-store` (stored frames: `private, no-cache`) and `X-Content-Type-Options: nosniff`.
 
 - The **access key** (printed in the terminal) gives the laptop role, which can call everything.
 - The **phone key** (in the QR code, derived from the access key) gives the phone role, which can only call
@@ -124,7 +139,7 @@ stays the same when other objects are removed; use it, not the object's position
 | POST | `/api/ping` | 📱 Phone heartbeat |
 | POST | `/api/scans` | 📱 multipart `frames` (1-6 JPEG/PNG/WebP): detect, read and match. 429 when over `MAX_SCANS_PER_MINUTE` or `MAX_CONCURRENT_SCANS` |
 | GET | `/api/phone/scans` | 📱 Scans and summary for the phone's Results sheet |
-| GET | `/api/scans/{id}/frames/{i}` | 📱 A stored frame |
+| GET | `/api/scans/{id}/frames/{i}` | 📱 A stored frame. 404 once the scan's images were dropped to stay under `MAX_FRAME_STORE_BYTES` (the scan then has `"images_dropped": true`) |
 | POST | `/api/scans/{id}/objects/{object_id}` | `{"item_id": "..."\|null}` correct a match |
 | DELETE | `/api/scans/{id}/objects/{object_id}` | 📱 Remove one detected object |
 | DELETE | `/api/scans/{id}` | 📱 Remove one scan, in whichever tab it belongs to |

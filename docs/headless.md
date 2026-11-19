@@ -47,6 +47,21 @@ key for a real count.
 Reading **videos** needs PyAV (the `video` extra) or the `ffmpeg` command on your PATH. Photos need nothing
 extra. **HEIC photos** aren't supported: export them as JPEG, or set the iPhone camera to *Most Compatible*.
 
+**What is read, and the limits.** Photos and videos usually come from someone else, so a file is only read
+as what this tool supports, whatever it is called:
+
+- **Photos:** JPEG, PNG, WebP, BMP, TIFF or GIF (`.jpg .jpeg .png .webp .bmp .tif .tiff .gif`), up to
+  100 megapixels. A larger photo is refused before it is decoded: export a smaller copy.
+- **Videos:** MP4/MOV, Matroska/WebM or AVI (`.mp4 .mov .m4v .3gp .mkv .webm .avi`), read from the file
+  itself. A playlist or stream description saved under one of those names is refused, so a "video" cannot
+  make the tool fetch a URL or read another file.
+- **Frames from a video:** one every 0.1 to 3,600 seconds, 1 to 6 per scan. The `ffmpeg` fallback gives up on
+  a video after 10 minutes, or when it would take more than 6,000 frames from it without a scan limit; PyAV
+  has neither limit.
+- **Folders:** a link inside a folder that leads out of the folder is skipped (and logged).
+- **Scan limit:** reading stops at `--max-scans` / `max_scans`. What lies beyond it is not decoded, so it is
+  reported as a number of files, not of scans.
+
 The Docker image includes all extras:
 ```bash
 docker run --rm -v "$PWD:/work" -w /work --env-file .env ghcr.io/rbaran17/inventory-checker-agent \
@@ -70,7 +85,7 @@ inventory-checker check --listing items_to_be_tested.xlsx  photos/  aisle3.mp4  
 | `--out FILE` | `.xlsx`, `.csv` or `.json`. Repeat it to write several |
 | `--every SECONDS` | Video: seconds between frames (default 1.0) |
 | `--segment-frames N` | Video: frames per scan, 1–6 (default 4) |
-| `--max-scans N` | Cost guard: stop after N scans (default 50) |
+| `--max-scans N` | Cost guard: stop after N scans (default 50). Files beyond that are not read; a note says how many were left out |
 | `--dry-run` | List the scans that would run and how many model calls they make. Sends nothing and needs no API key |
 | `--offline` | Run everything with a stand-in detector and no model call. For trying the flow; results are not real |
 | `--detector MODULE:FUNCTION` | Your own detector instead of a hosted model (same as `DETECTOR`, see [extending.md](extending.md)). Modules in the current folder are found |
@@ -125,7 +140,7 @@ Gives an AI agent tools to run a count. It works on one count at a time, kept in
 |---|---|
 | `load_listing(path)`, `load_listing_csv(csv_text)`, `load_demo_listing()` | Start a count |
 | `set_details(client, location, count_date, counter)` | Details for the exported workbook |
-| `check_media(paths, every_seconds, segment_frames, max_scans)` | Scan photos, videos or folders from disk |
+| `check_media(paths, every_seconds, segment_frames, max_scans)` | Scan photos, videos or folders from disk. At most 200 scans per call; `skipped` in the answer is the number of files left unscanned or only partly scanned |
 | `check_image(data_base64, media_type)` | Scan one image sent inline, e.g. pasted into a chat |
 | `get_results(status)` | Per-item results, optionally only `exception`, `check`, … |
 | `list_scans()` | Scans with object IDs |

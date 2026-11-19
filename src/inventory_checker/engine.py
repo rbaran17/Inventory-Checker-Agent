@@ -146,8 +146,12 @@ class InventoryCheck:
 
     async def acheck_paths(self, paths: Iterable[str | Path], *, every_seconds: float = 1.0, segment_frames: int = 4,
                            **kw: Any) -> list[dict[str, Any]]:
-        """Photos and videos (or folders of them): one scan per photo, one per video segment."""
-        return await self.acheck_segments(segments(paths, every_seconds, segment_frames), **kw)
+        """Photos and videos (or folders of them): one scan per photo, one per video segment.
+
+        Files are read as they are scanned; with ``max_scans`` nothing past that many scans is decoded.
+        """
+        return await self.acheck_segments(segments(paths, every_seconds, segment_frames, limit=kw.get("max_scans")),
+                                          **kw)
 
     def check_frames(self, frames: list[Frame], **kw: Any) -> dict[str, Any]:
         return _run(self.acheck_frames(frames, **kw))

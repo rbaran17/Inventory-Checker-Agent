@@ -67,25 +67,106 @@ class Sample(BaseModel):
 MAX_ROWS = 5000                              # rows read, including the header and blank rows
 MAX_COLUMNS = 60
 MAX_CELL_CHARS = 500
+# Text kept from the whole listing. The listing is held in memory and sent to the laptop page with every
+# refresh, several times over (as the listing, in the results and in each attribute check), so the row, column
+# and cell limits alone still allowed 150 million characters. Each item is charged for its cells and for its
+# attribute names, which are repeated for every item. 4 million covers 5,000 items with some twenty columns
+# of ordinary width.
+MAX_LISTING_CHARS = 4_000_000
 MAX_XLSX_UNPACKED_BYTES = 64 * 1024 * 1024   # total uncompressed size of the workbook's parts
 MAX_XLSX_PARTS = 2000
+# Parts of a workbook that are read whole before the first row is seen, where each megabyte of XML costs tens
+# of megabytes of memory and about a second. Real listings need a small fraction of these.
+MAX_XLSX_STYLES_BYTES = 2 * 1024 * 1024           # cell formats; a few hundred KB in a heavily formatted workbook
+MAX_XLSX_SHARED_STRINGS_BYTES = 8 * 1024 * 1024   # the text of every sheet; a listing at MAX_LISTING_CHARS needs ~6 MB
+MAX_XLSX_META_BYTES = 2 * 1024 * 1024             # content types, workbook, relationships, properties, theme
+# Any other XML part, the worksheet above all. A sheet at the row and column limits is about 13 MB; one row with
+# millions of cells, or millions of merged ranges, costs some 35 MB of memory per megabyte whatever is kept.
+MAX_XLSX_XML_PART_BYTES = 16 * 1024 * 1024
+
+_CONTENT_TYPES = "[Content_Types].xml"
+_SHARED_STRINGS_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+_WORKBOOK_TYPES = {f"application/vnd.{kind}.main+xml" for kind in (
+    "openxmlformats-officedocument.spreadsheetml.sheet", "openxmlformats-officedocument.spreadsheetml.template",
+    "ms-excel.sheet.macroEnabled", "ms-excel.template.macroEnabled")}
+# Control characters that a spreadsheet cell cannot hold (tab, line feed and carriage return are allowed).
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
 
 def _too_many_rows() -> ValueError:
     return ValueError(f"The listing has more than {MAX_ROWS} rows. Split it, or upload only the items to be tested.")
 
 
+def _too_large_unpacked() -> ValueError:
+    return ValueError("The Excel file is too large when unpacked. Save the listing as CSV and upload that.")
+
+
+def _too_much_text() -> ValueError:
+    return ValueError(f"The listing holds more than {MAX_LISTING_CHARS:,} characters of text (each item counts its "
+                      "cells and its column names). Remove columns that do not need checking, or split the listing.")
+
+
+class _Rows:
+    """Rows as they are read: cells cut to the cell limit at once, and reading stopped at the row and text
+    limits, so a listing that is over a limit is never held in memory whole."""
+
+    def __init__(self) -> None:
+        self.rows: list[list[str]] = []
+        self.chars = 0
+
+    def add(self, cells: Any) -> None:
+        if len(self.rows) >= MAX_ROWS:
+            raise _too_many_rows()
+        row = [_cell(c) for c in cells]
+        self.chars += sum(map(len, row))
+        if self.chars > MAX_LISTING_CHARS:
+            raise _too_much_text()
+        self.rows.append(row)
+
+
+def _xlsx_part_limits(zf: zipfile.ZipFile, names: set[str]) -> dict[str, int]:
+    """Size limit for each part that the workbook reader loads whole.
+
+    The shared strings and the workbook part can have any name: the reader finds them through the content
+    types, so they are found the same way here. The others have fixed names or a fixed extension.
+    """
+    limits = {name: MAX_XLSX_META_BYTES for name in names
+              if name == _CONTENT_TYPES or name.endswith(".rels") or name.startswith(("docProps/", "xl/theme/"))}
+    limits["xl/workbook.xml"] = MAX_XLSX_META_BYTES
+    limits["xl/styles.xml"] = MAX_XLSX_STYLES_BYTES
+    limits["xl/sharedStrings.xml"] = MAX_XLSX_SHARED_STRINGS_BYTES
+    if _CONTENT_TYPES in names and zf.getinfo(_CONTENT_TYPES).file_size <= MAX_XLSX_META_BYTES:
+        from defusedxml.ElementTree import fromstring
+
+        for el in fromstring(zf.read(_CONTENT_TYPES)).iter():
+            part, kind = (el.get("PartName") or "").lstrip("/"), el.get("ContentType")
+            if kind == _SHARED_STRINGS_TYPE:
+                limits[part] = min(limits.get(part, MAX_XLSX_SHARED_STRINGS_BYTES), MAX_XLSX_SHARED_STRINGS_BYTES)
+            elif kind in _WORKBOOK_TYPES:
+                limits[part] = MAX_XLSX_META_BYTES
+    return limits
+
+
 def _check_xlsx_archive(data: bytes) -> None:
-    """Reject a workbook that unpacks to far more than its upload size (a zip bomb) before parsing it."""
+    """Reject a workbook that unpacks to far more than its upload size (a zip bomb), or whose formatting,
+    text table or other parts that are loaded whole are far larger than a listing needs, before parsing it."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             parts = zf.infolist()
+            sizes = {p.filename: p.file_size for p in parts}
+            too_large = len(parts) > MAX_XLSX_PARTS or sum(sizes.values()) > MAX_XLSX_UNPACKED_BYTES
+            limits = {} if too_large else _xlsx_part_limits(zf, set(sizes))
     except zipfile.BadZipFile as exc:
         raise ValueError("The file is not a valid Excel workbook (.xlsx)") from exc
-    if len(parts) > MAX_XLSX_PARTS or sum(p.file_size for p in parts) > MAX_XLSX_UNPACKED_BYTES:
-        raise ValueError("The Excel file is too large when unpacked. Save the listing as CSV and upload that.")
+    except Exception as exc:  # content types that are not XML, or XML that defusedxml refuses
+        raise ValueError("The Excel file could not be read. Save the listing as CSV and upload that.") from exc
+    if too_large or any(sizes.get(name, 0) > limit for name, limit in limits.items()):
+        raise _too_large_unpacked()
+    if any(size > MAX_XLSX_XML_PART_BYTES for name, size in sizes.items() if name.lower().endswith((".xml", ".rels", ".vml"))):
+        raise _too_large_unpacked()
 
 
-def _rows_from_xlsx(data: bytes) -> list[list[Any]]:
+def _rows_from_xlsx(data: bytes) -> list[list[str]]:
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover - openpyxl is a dependency
@@ -93,36 +174,33 @@ def _rows_from_xlsx(data: bytes) -> list[list[Any]]:
     _check_xlsx_archive(data)
     try:
         # openpyxl parses the XML with defusedxml when it is installed (it is a dependency of this package),
-        # which blocks entity-expansion attacks.
-        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        # which blocks entity-expansion attacks. Links to other workbooks are not needed (cached values are
+        # read), and their cached copies of those workbooks can be large: they are not loaded.
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
         ws = wb.worksheets[0]
-        rows: list[list[Any]] = []
+        found = _Rows()
         for r in ws.iter_rows(values_only=True, max_col=MAX_COLUMNS):
-            if len(rows) >= MAX_ROWS:
-                raise _too_many_rows()
-            rows.append(list(r))
-        return rows
+            found.add(r)
+        return found.rows
     except ValueError:
         raise
     except Exception as exc:  # malformed or hostile workbook: report it, don't crash the request
         raise ValueError("The Excel file could not be read. Save the listing as CSV and upload that.") from exc
 
 
-def _rows_from_csv(data: bytes) -> list[list[Any]]:
+def _rows_from_csv(data: bytes) -> list[list[str]]:
     text = data.decode("utf-8-sig", errors="replace")
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
     except csv.Error:
         dialect = csv.excel
-    rows: list[list[Any]] = []
+    found = _Rows()
     try:
         for r in csv.reader(io.StringIO(text), dialect):
-            if len(rows) >= MAX_ROWS:
-                raise _too_many_rows()
-            rows.append(r[:MAX_COLUMNS])
+            found.add(r[:MAX_COLUMNS])
     except csv.Error as exc:
         raise ValueError(f"The CSV file could not be read: {exc}") from exc
-    return rows
+    return found.rows
 
 
 def _cell(v: Any) -> str:
@@ -130,14 +208,14 @@ def _cell(v: Any) -> str:
         return ""
     if isinstance(v, float) and v.is_integer():
         v = int(v)
-    return str(v).strip()[:MAX_CELL_CHARS]
+    return _CONTROL_CHARS.sub("", str(v)).strip()[:MAX_CELL_CHARS]
 
 
 def parse_sample(data: bytes, filename: str = "sample.csv") -> Sample:
     """Read a CSV or Excel (.xlsx) sample. Raises ValueError with a message an auditor can act on."""
     is_xlsx = filename.lower().endswith((".xlsx", ".xlsm")) or data[:2] == b"PK"
     rows = _rows_from_xlsx(data) if is_xlsx else _rows_from_csv(data)
-    rows = [[_cell(c) for c in r] for r in rows if any(_cell(c) for c in r)]
+    rows = [r for r in rows if any(r)]
     if not rows:
         raise ValueError("The file is empty")
     header = rows[0]
@@ -156,11 +234,16 @@ def parse_sample(data: bytes, filename: str = "sample.csv") -> Sample:
                          "Name one 'description' (or 'item name').")
     items: list[SampleItem] = []
     seen: set[str] = set()
+    names_chars = sum(len(name) for name in attributes.values())
+    kept_chars = 0
     for line, row in enumerate(rows[1:], start=2):
         row = row + [""] * (len(header) - len(row))
         core = {name: row[i] for i, name in mapping.items()}
         if not core.get("description") and not core.get("item_id"):
             continue
+        kept_chars += names_chars + sum(len(row[i]) for i in (*mapping, *attributes))
+        if kept_chars > MAX_LISTING_CHARS:
+            raise _too_much_text()
         item_id = core.get("item_id") or f"ROW-{line}"
         if item_id in seen:
             raise ValueError(f"Row {line}: item ID {item_id} appears twice")

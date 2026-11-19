@@ -15,16 +15,24 @@ RESULT_LABEL = {"match": "Match", "near_match": "Near match - check", "mismatch"
                 "recorded": "Recorded", "n/a": ""}
 DECISION_LABEL = {"accepted": "Accepted", "follow_up": "Follow up", None: ""}
 
-# Label text, object names, notes and listing cells come from the audited party or the model. A spreadsheet
-# treats a cell starting with one of these as a formula, so such text is never written as-is.
+# Label text, object names, notes, listing cells and listing column names come from the audited party or the
+# model. A spreadsheet treats a cell starting with one of these as a formula, so such text is never written as-is.
 _FORMULA_START = ("=", "+", "-", "@", "\t", "\r", "\n")
+# The same characters where a spreadsheet may start a new cell inside the value. The file is comma-separated
+# and quoted for that, but Excel set to a semicolon list separator (most of Europe) splits each line at ";"
+# instead and only honours a quote at the very start of a cell, so "Laptop;=1+1;x" becomes three cells, the
+# middle one a formula. A tab or a line break inside a value can start a cell the same way. Quoting cannot
+# prevent this (the quotes belong to the comma layout), so the formula character itself is neutralised.
+_FORMULA_INSIDE = re.compile(r"([;\t\r\n][ \t]*)(?=[=+\-@])")
 
 
 def csv_safe(value: Any) -> Any:
-    """Text that a spreadsheet would run as a formula gets a leading apostrophe; other values pass through."""
-    if isinstance(value, str) and value.startswith(_FORMULA_START):
-        return "'" + value
-    return value
+    """Text that a spreadsheet would run as a formula gets an apostrophe in front of it, at the start of the
+    value and after any semicolon, tab or line break inside it; other values pass through."""
+    if not isinstance(value, str):
+        return value
+    value = _FORMULA_INSIDE.sub(r"\1'", value)
+    return "'" + value if value.startswith(_FORMULA_START) else value
 
 
 def filename(workspace: str, details: dict[str, Any]) -> str:
@@ -54,7 +62,7 @@ def results_csv(sample: Sample, assessment: dict[str, Any]) -> str:
     header, rows = _rows(sample, assessment)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(header)
+    w.writerow([csv_safe(h) for h in header])  # attribute column names are text from the listing too
     w.writerows([["" if v is None else csv_safe(v) for v in row] for row in rows])
     return buf.getvalue()
 
@@ -62,20 +70,28 @@ def results_csv(sample: Sample, assessment: dict[str, Any]) -> str:
 def results_xlsx(sample: Sample, assessment: dict[str, Any], details: dict[str, Any], scans: list[dict[str, Any]],
                  ai_label: str) -> bytes:
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
+
+    def clean(v: Any) -> Any:
+        """A cell value openpyxl accepts. It refuses text that holds control characters (a vertical tab inside
+        a label, a group separator from a barcode), and one such cell used to fail the whole export."""
+        if v is None:
+            return ""
+        return ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v
 
     head_fill, head_font = PatternFill("solid", start_color="1F2A44"), Font(bold=True, color="FFFFFF")
     fills = {"Verified": "DFF3E7", "Check": "FFF1C7", "Exception": "FDE3E3", "Mismatch": "FDE3E3",
              "Near match - check": "FFF1C7", "Match": "DFF3E7", "Not read": "FFF1C7"}
 
     def table(ws, header: list[str], rows: list[list[Any]], color_cols: tuple[str, ...] = ()) -> None:
-        ws.append(header)
+        ws.append([clean(h) for h in header])
         for c in ws[ws.max_row]:
             c.fill, c.font, c.alignment = head_fill, head_font, Alignment(wrap_text=True, vertical="top")
         idx = [i for i, h in enumerate(header) if h in color_cols or h.endswith(" result")]
         for row in rows:
-            ws.append(["" if v is None else v for v in row])
+            ws.append([clean(v) for v in row])
             for i in idx:
                 cell = ws.cell(ws.max_row, i + 1)
                 if (color := fills.get(str(cell.value))):
@@ -98,7 +114,7 @@ def results_xlsx(sample: Sample, assessment: dict[str, Any], details: dict[str, 
              ("Reviewed (of check + exceptions)", f"{s['reviewed']} of {s['to_review']}"),
              ("Objects seen but not on the listing", len(assessment["not_in_sample"]))]
     for k, v in lines:
-        ws.append([k, v])
+        ws.append([k, clean(v)])
     ws["A1"].font = Font(bold=True, size=14)
     for row in ws.iter_rows(min_row=2):
         row[0].font = Font(bold=True)

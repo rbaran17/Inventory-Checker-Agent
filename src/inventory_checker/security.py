@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import logging
 import re
 import time
@@ -45,6 +46,32 @@ def derive(access_key: str, purpose: str) -> str:
 
 def phone_may(method: str, path: str) -> bool:
     return any(method == m and p.fullmatch(path) for m, p in _PHONE_ROUTES)
+
+
+UNKNOWN_CALLER = "unknown"
+
+
+def caller_key(host: str | None) -> str:
+    """The attempt-limiter bucket for a client address.
+
+    The address is whatever the server (or a proxy it was told to trust, see ``FORWARDED_ALLOW_IPS``) reports,
+    so it is validated rather than used as-is: an IPv4 address is its own bucket; an IPv6 address shares one
+    with its /64, because a single subscriber holds a whole /64 and could otherwise use a fresh address for
+    every guess; anything that is not an IP address goes into one fixed bucket. The result is always short,
+    so a caller cannot make the limiter keep long strings.
+    """
+    text = (host or "").strip()
+    if not text or len(text) > 64:  # the longest textual IPv6 address with a zone is well under this
+        return UNKNOWN_CALLER
+    try:
+        ip = ipaddress.ip_address(text.split("%", 1)[0])  # drop an IPv6 zone such as %eth0
+    except ValueError:
+        return UNKNOWN_CALLER
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is None:
+            return str(ipaddress.ip_network((int(ip) >> 64 << 64, 64)))
+        ip = ip.ipv4_mapped
+    return str(ip)
 
 
 class AttemptLimiter:
