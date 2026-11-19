@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Security: Python 3.11 is now the minimum. Python 3.10 is end-of-life and can only install Pillow 12, which has
+  open advisories and no fix; photos are decoded with Pillow. Minimum versions raised for `fastapi` (patched
+  Starlette), `python-multipart`, `pillow` and `mcp`, so an existing install can no longer keep a vulnerable one.
 - `inventory-checker check --offline`: run the whole headless flow with a stand-in detector and no API key,
   to check an installation and see the outputs before spending credits. Results are labelled as not real.
 - `inventory-checker check --detector module:function`, and detectors in the current folder now load with the

@@ -11,7 +11,7 @@ ruff check src tests examples
 pytest -q                     # no API keys or network: providers are faked
 ```
 
-Run both before every commit. CI runs the same on Python 3.10–3.13, then builds the Docker image and
+Run both before every commit. CI runs the same on Python 3.11–3.13, then builds the Docker image and
 smoke-tests it.
 
 On Windows: `.venv\Scripts\activate` instead of `source .venv/bin/activate`.
