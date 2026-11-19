@@ -5,7 +5,7 @@ description = "Count and verify inventory with a phone camera: an AI agent on Mi
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Inventory-Checker-Agent contributors" }]
 keywords = ["audit", "inventory", "computer-vision", "agents", "microsoft-agent-framework", "claude", "azure-openai"]
 classifiers = [
@@ -15,7 +15,6 @@ classifiers = [
     "Intended Audience :: Financial and Insurance Industry",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -26,11 +25,12 @@ dependencies = [
     "agent-framework-core>=1.23.0",
     "agent-framework-anthropic>=1.0.0b261022",
     "agent-framework-openai>=1.17.0",
-    "fastapi>=0.115",
+    "fastapi>=0.164",            # first line that requires a patched Starlette (>=1.6)
     "uvicorn[standard]>=0.30",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.31",  # multipart parser fixes (PYSEC-2026-1851 … 3040)
     "pydantic>=2.7",
     "qrcode[pil]>=7.4",
+    "pillow>=13",                # decodes uploaded photos; 12.x has open advisories and no fix
     "openpyxl>=3.1",
     "defusedxml>=0.7",   # openpyxl uses it, when installed, to parse uploaded workbooks safely
 ]
@@ -38,9 +38,9 @@ dependencies = [
 [project.optional-dependencies]
 azure = ["azure-identity>=1.17"]   # keyless Azure OpenAI sign-in (Entra ID / managed identity)
 video = ["av>=12"]                 # read video files in headless runs (or have ffmpeg on PATH)
-mcp = ["mcp>=2.0,<3"]              # `inventory-checker mcp`: MCP server for AI agents
+mcp = ["mcp>=2.2,<3"]              # `inventory-checker mcp`: MCP server for AI agents
 all = ["inventory-checker-agent[azure,video,mcp]"]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "build>=1.2"]
+dev = ["pytest>=9.0.3", "httpx>=0.27", "ruff>=0.6", "build>=1.2"]
 
 [project.scripts]
 inventory-checker = "inventory_checker.cli:main"
@@ -65,7 +65,7 @@ pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 ignore = ["B008", "SIM102"]  # B008: FastAPI Depends/File/Form defaults are the framework idiom

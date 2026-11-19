@@ -90,7 +90,7 @@ by itself.
 
 ## Quick start (Python)
 
-Python 3.10 or newer.
+Python 3.11 or newer.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -294,7 +294,7 @@ ruff check src tests examples
 docker build -t inventory-checker-agent:local .
 ```
 
-CI runs lint and tests on Python 3.10–3.13, builds the package and the image, and smoke-tests the container.
+CI runs lint and tests on Python 3.11–3.13, builds the package and the image, and smoke-tests the container.
 Pushes to `main` publish the image to GHCR. Tags `vX.Y.Z` also publish a GitHub release with the wheel and
 source archive. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
